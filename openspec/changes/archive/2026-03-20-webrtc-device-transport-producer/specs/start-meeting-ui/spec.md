@@ -1,15 +1,4 @@
-## ADDED Requirements
-
-### Requirement: Client connects to socket server
-The system SHALL establish a socket.io connection to the server using a configurable URL (`VITE_SERVER_URL`, defaulting to `http://localhost:3001`).
-
-#### Scenario: Socket connects on app load
-- **WHEN** the React app mounts
-- **THEN** a socket.io client connection is established to the server URL
-
-#### Scenario: Custom server URL is respected
-- **WHEN** `VITE_SERVER_URL` environment variable is set
-- **THEN** the socket connects to that URL instead of the default
+## MODIFIED Requirements
 
 ### Requirement: Start Meeting button triggers full WebRTC setup
 The system SHALL render a **Start Meeting** button that, when clicked, orchestrates the full WebRTC flow: emit `create-router`, load mediasoup Device with RTP capabilities, create and connect a send transport, acquire local media, and produce audio and video tracks.
@@ -28,4 +17,4 @@ The system SHALL render a **Start Meeting** button that, when clicked, orchestra
 
 #### Scenario: Error displays failure message
 - **WHEN** any step in the flow fails (including camera permission denied)
-- **THEN** the UI displays an error message and the button is re-enabled
+- **THEN** the UI displays a descriptive error message and the Start Meeting button is re-enabled

@@ -6,7 +6,12 @@ const {
   closeMediasoupWorkers,
   getMediasoupWorkers,
 } = require('./mediasoupBootstrap');
-const { createRouter } = require('./roomManager');
+const { createRouter, getRouter } = require('./roomManager');
+const {
+  createWebRtcTransport,
+  connectTransport,
+  createProducer,
+} = require('./transportManager');
 
 const app = express();
 const port = Number(process.env.PORT) || 3001;
@@ -31,6 +36,54 @@ io.on('connection', (socket) => {
     } catch (error) {
       console.error('Failed to create router:', error);
       if (typeof ack === 'function') ack({ error: error.message });
+    }
+  });
+
+  socket.on('get-rtp-capabilities', (data, ack) => {
+    try {
+      const router = getRouter(data?.routerId);
+      if (!router) return ack({ error: 'Router not found' });
+      ack({ rtpCapabilities: router.rtpCapabilities });
+    } catch (error) {
+      console.error('get-rtp-capabilities error:', error);
+      ack({ error: error.message });
+    }
+  });
+
+  socket.on('create-webrtc-transport', async (data, ack) => {
+    try {
+      const transport = await createWebRtcTransport(data?.routerId);
+      console.log(`Transport created: ${transport.id} (socket=${socket.id})`);
+      ack({
+        id: transport.id,
+        iceParameters: transport.iceParameters,
+        iceCandidates: transport.iceCandidates,
+        dtlsParameters: transport.dtlsParameters,
+      });
+    } catch (error) {
+      console.error('create-webrtc-transport error:', error);
+      ack({ error: error.message });
+    }
+  });
+
+  socket.on('connect-transport', async (data, ack) => {
+    try {
+      await connectTransport(data?.transportId, data?.dtlsParameters);
+      ack({});
+    } catch (error) {
+      console.error('connect-transport error:', error);
+      ack({ error: error.message });
+    }
+  });
+
+  socket.on('produce', async (data, ack) => {
+    try {
+      const producer = await createProducer(data?.transportId, data?.kind, data?.rtpParameters);
+      console.log(`Producer created: ${producer.id} kind=${producer.kind} (socket=${socket.id})`);
+      ack({ id: producer.id });
+    } catch (error) {
+      console.error('produce error:', error);
+      ack({ error: error.message });
     }
   });
 
