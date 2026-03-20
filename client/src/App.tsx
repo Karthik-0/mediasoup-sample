@@ -3,9 +3,35 @@ import reactLogo from './assets/react.svg'
 import viteLogo from './assets/vite.svg'
 import heroImg from './assets/hero.png'
 import './App.css'
+import { socket } from './lib/socket'
+import { Button } from './components/ui/button'
 
 function App() {
   const [count, setCount] = useState(0)
+  const [routerId, setRouterId] = useState<string | null>(null)
+  const [meetingError, setMeetingError] = useState<string | null>(null)
+  const [starting, setStarting] = useState(false)
+
+  function startMeeting() {
+    setStarting(true)
+    setRouterId(null)
+    setMeetingError(null)
+
+    const timeout = setTimeout(() => {
+      setMeetingError('Request timed out. Is the server running?')
+      setStarting(false)
+    }, 8000)
+
+    socket.emit('create-router', (res: { routerId?: string; error?: string }) => {
+      clearTimeout(timeout)
+      setStarting(false)
+      if (res?.routerId) {
+        setRouterId(res.routerId)
+      } else {
+        setMeetingError(res?.error ?? 'Unknown error')
+      }
+    })
+  }
 
   return (
     <>
@@ -27,6 +53,22 @@ function App() {
         >
           Count is {count}
         </button>
+
+        <div style={{ marginTop: '1.5rem', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.75rem' }}>
+          <Button onClick={startMeeting} disabled={starting}>
+            {starting ? 'Starting…' : 'Start Meeting'}
+          </Button>
+          {routerId && (
+            <p style={{ fontFamily: 'monospace', fontSize: '0.85rem', color: 'var(--vp-c-green-2, #3dd68c)' }}>
+              Router ID: {routerId}
+            </p>
+          )}
+          {meetingError && (
+            <p style={{ fontSize: '0.85rem', color: 'var(--vp-c-red-2, #f44336)' }}>
+              Error: {meetingError}
+            </p>
+          )}
+        </div>
       </section>
 
       <div className="ticks"></div>
