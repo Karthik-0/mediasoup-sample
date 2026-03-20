@@ -11,6 +11,7 @@ const {
   createWebRtcTransport,
   connectTransport,
   createProducer,
+  getTransport,
 } = require('./transportManager');
 
 const app = express();
@@ -26,6 +27,40 @@ const io = new SocketIOServer(httpServer, {
 
 // Socket.io signaling
 io.on('connection', (socket) => {
+    // In-memory room membership: roomId -> Set of socket ids
+    const rooms = io.roomsMap = io.roomsMap || new Map();
+
+    // In-memory: producerId -> { producer, socketId, roomId }
+    const producers = io.producersMap = io.producersMap || new Map();
+
+
+    // join-room event: { roomId }, ack({ success, error })
+    socket.on('join-room', (data, ack) => {
+      try {
+        const roomId = data?.roomId;
+        if (!roomId) return ack && ack({ error: 'Missing roomId' });
+        if (!rooms.has(roomId)) rooms.set(roomId, new Set());
+        rooms.get(roomId).add(socket.id);
+        socket.join(roomId);
+        // Notify existing peers in the room
+        socket.to(roomId).emit('peer-joined', { peerId: socket.id });
+        if (typeof ack === 'function') ack({ success: true });
+      } catch (error) {
+        console.error('join-room error:', error);
+        if (typeof ack === 'function') ack({ error: error.message });
+      }
+    });
+
+    socket.on('disconnect', () => {
+      // Remove from all rooms and notify peers
+      for (const [roomId, members] of rooms.entries()) {
+        if (members.delete(socket.id)) {
+          socket.to(roomId).emit('peer-left', { peerId: socket.id });
+          if (members.size === 0) rooms.delete(roomId);
+        }
+      }
+      console.log(`Socket disconnected: ${socket.id}`);
+    });
   console.log(`Socket connected: ${socket.id}`);
 
   socket.on('create-router', async (ack) => {
@@ -79,10 +114,63 @@ io.on('connection', (socket) => {
   socket.on('produce', async (data, ack) => {
     try {
       const producer = await createProducer(data?.transportId, data?.kind, data?.rtpParameters);
+      producers.set(producer.id, { producer, socketId: socket.id, roomId: data?.roomId });
       console.log(`Producer created: ${producer.id} kind=${producer.kind} (socket=${socket.id})`);
       ack({ id: producer.id });
     } catch (error) {
       console.error('produce error:', error);
+      ack({ error: error.message });
+    }
+  });
+
+  socket.on('get-producers', (data, ack) => {
+    try {
+      const roomId = data?.roomId;
+      if (!roomId) return ack({ error: 'Missing roomId' });
+      const producersList = [];
+      for (const [id, info] of producers.entries()) {
+        if (info.roomId === roomId && info.socketId !== socket.id) {
+          producersList.push({ producerId: id, peerId: info.socketId });
+        }
+      }
+      console.log(`get-producers called by ${socket.id} for room ${roomId}: found ${producersList.length} producers`);
+      ack({ producers: producersList });
+    } catch (error) {
+      ack({ error: error.message });
+    }
+  });
+
+  socket.on('consume', async (data, ack) => {
+    try {
+      const { routerId, producerId, transportId, rtpCapabilities } = data || {};
+      if (!routerId || !producerId || !transportId) return ack({ error: 'Missing routerId, producerId, or transportId' });
+
+      // Get router and producer
+      const router = getRouter(routerId);
+      if (!router) return ack({ error: 'Router not found' });
+      const producerInfo = io.producersMap.get(producerId);
+      if (!producerInfo) return ack({ error: 'Producer not found' });
+      const producer = producerInfo.producer;
+
+      // Locate the existing WebRTC transport the client just created
+      const recvTransport = getTransport(transportId);
+      if (!recvTransport) return ack({ error: 'Consumer WebRTC transport not found' });
+
+      // Create the consumer
+      const consumer = await recvTransport.consume({
+        producerId: producer.id,
+        rtpCapabilities: rtpCapabilities || router.rtpCapabilities,
+        paused: false,
+      });
+
+      // mediasoup consumer params to send to client
+      ack({
+        id: consumer.id,
+        producerId: consumer.producerId,
+        kind: consumer.kind,
+        rtpParameters: consumer.rtpParameters,
+      });
+    } catch (error) {
       ack({ error: error.message });
     }
   });

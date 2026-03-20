@@ -1,11 +1,13 @@
 import { Device } from 'mediasoup-client';
-import type { Producer } from 'mediasoup-client/types';
+import type { Producer, Transport } from 'mediasoup-client/types';
 import type { Socket } from 'socket.io-client';
 
 export interface MeetingResult {
   stream: MediaStream;
   audioProducer: Producer;
   videoProducer: Producer;
+  device: Device;
+  sendTransport: Transport;
 }
 
 /** Promisified socket emit with ack */
@@ -51,7 +53,7 @@ export async function startMeeting(routerId: string, socket: Socket): Promise<Me
 
   // 4.5 — Wire transport 'produce' event
   transport.on('produce', ({ kind, rtpParameters }, callback, errback) => {
-    emit<{ id: string }>(socket, 'produce', { transportId: transport.id, kind, rtpParameters })
+    emit<{ id: string }>(socket, 'produce', { roomId: routerId, transportId: transport.id, kind, rtpParameters })
       .then(({ id }) => callback({ id }))
       .catch(errback);
   });
@@ -67,5 +69,50 @@ export async function startMeeting(routerId: string, socket: Socket): Promise<Me
   const audioProducer = await transport.produce({ track: audioTrack });
 
   // 4.8 — Return result
-  return { stream, audioProducer, videoProducer };
+  return { stream, audioProducer, videoProducer, device, sendTransport: transport };
+}
+
+/**
+ * Consume a remote producer and return a MediaStream.
+ */
+export async function consumeRemote(
+  socket: Socket,
+  device: Device,
+  routerId: string,
+  producerId: string
+): Promise<MediaStream> {
+  // 1. Create a recv transport if not already created
+  // (For simplicity, create a new one per consumer)
+  const transportParams = await emit<{
+    id: string;
+    iceParameters: object;
+    iceCandidates: object[];
+    dtlsParameters: object;
+  }>(socket, 'create-webrtc-transport', { routerId });
+  const recvTransport = device.createRecvTransport(transportParams as any);
+
+  // 2. Connect transport event
+  recvTransport.on('connect', ({ dtlsParameters }, callback, errback) => {
+    emit(socket, 'connect-transport', { transportId: recvTransport.id, dtlsParameters })
+      .then(() => callback())
+      .catch(errback);
+  });
+
+  // 3. Request server to create consumer
+  const consumerParams = await emit<any>(socket, 'consume', { 
+    routerId, 
+    producerId,
+    transportId: recvTransport.id,
+    rtpCapabilities: device.rtpCapabilities
+  });
+  // consumerParams: { id, kind, rtpParameters, producerId, ... }
+  const consumer = await recvTransport.consume({
+    id: consumerParams.id,
+    producerId: consumerParams.producerId,
+    kind: consumerParams.kind,
+    rtpParameters: consumerParams.rtpParameters,
+  });
+  // 4. Create MediaStream from consumer track
+  const stream = new MediaStream([consumer.track]);
+  return stream;
 }
