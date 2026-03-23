@@ -11,16 +11,16 @@ The system SHALL attach a socket.io `Server` instance to the existing `http.Serv
 - **WHEN** a browser client connects from any origin (development mode)
 - **THEN** the socket.io handshake succeeds without CORS errors
 
-### Requirement: Server handles create-router event
-The system SHALL listen for a `create-router` socket event from any connected client and respond with an acknowledgement containing a router ID.
+### Requirement: Server handles join-room event
+The system SHALL securely process arbitrary `roomId` string payloads within `join-room` emissions, dynamically instantiating the underlying backend routing shard mapped to that Room if absent, before concluding attachment logic for the participant. The server SHALL also add the client to that room for peer event broadcasting.
 
-#### Scenario: Client emits create-router and receives router ID
-- **WHEN** a connected client emits the `create-router` event
-- **THEN** the server creates a mediasoup Router and calls the acknowledgement callback with `{ routerId: "<uuid>" }`
+#### Scenario: User provides a new custom room name
+- **WHEN** a client emits `join-room` referencing `"My Awesome Lobby"`
+- **THEN** the signaling server creates a new Router mapped to that identifier if one does not exist, and returns confirmation
 
-#### Scenario: Router creation failure returns error
-- **WHEN** router creation throws an error
-- **THEN** the acknowledgement callback is called with `{ error: "<message>" }` and no router is stored
+#### Scenario: Client emits join-room and is added
+- **WHEN** a client emits `join-room` with a valid `{ roomId }`
+- **THEN** the server adds the client to the room and acknowledges
 
 ### Requirement: Server handles get-rtp-capabilities event
 The system SHALL listen for a `get-rtp-capabilities` socket event and respond with the router's RTP capabilities.
@@ -49,6 +49,31 @@ The system SHALL listen for a `produce` socket event and create a mediasoup Prod
 #### Scenario: Emitting produce returns producer ID
 - **WHEN** a connected client emits `produce` with `{ transportId, kind, rtpParameters }`
 - **THEN** the server creates a Producer and acknowledges with `{ id: <producerId> }`
+
+### Requirement: Server handles get-producers event
+The system SHALL return a globally synchronized array of active external media producers mapped to the current room topology, enriching the response payload with granular telemetry detailing the exact shard origin.
+
+#### Scenario: User requests remote producers
+- **WHEN** the frontend emits `get-producers` providing their `roomId`
+- **THEN** the server returns an array containing `producerId`, `peerId`, `routerId`, and `workerPid` explicitly identifying the node origin of each item
+
+### Requirement: Server notifies peers on join/leave
+The system SHALL emit `peer-joined` and `peer-left` events to all clients in a room when participants join or leave.
+
+#### Scenario: peer-joined event is sent
+- **WHEN** a new participant joins a room
+- **THEN** all clients in the room receive a `peer-joined` event with the new participant's info
+
+#### Scenario: peer-left event is sent
+- **WHEN** a participant leaves a room
+- **THEN** all clients in the room receive a `peer-left` event with the departing participant's ID
+
+### Requirement: Server relays media signaling for multi-user
+The system SHALL relay media signaling events (e.g., transport/producer info) between all participants in a room as needed for multi-user media setup.
+
+#### Scenario: Media signaling is routed to correct peers
+- **WHEN** a client emits a media signaling event for a room
+- **THEN** the server relays it to the intended participants
 
 ### Requirement: Server handles get-stats event and returns all-worker stats
 The server SHALL listen for a `get-stats` socket event and respond with system-level resource stats and per-worker stats for every worker in the mediasoup pool.
