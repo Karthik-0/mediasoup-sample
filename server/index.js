@@ -38,6 +38,7 @@ io.on('connection', (socket) => {
     socket.on('join-room', async (data, ack) => {
       try {
         const roomId = data?.roomId;
+        const userName = data?.userName || 'Unknown';
         if (!roomId) return ack && ack({ error: 'Missing roomId' });
         
         // Task 1.2 & 3.2: Allocate to a router shard
@@ -50,6 +51,7 @@ io.on('connection', (socket) => {
         // Track shard attachment for cleanup
         socket.roomId = roomId;
         socket.routerId = router.id;
+        socket.userName = userName;
         addPeerToRouter(router.id);
         
         // Task 2.2: Retroactive historical piping for a newly populated shard
@@ -70,7 +72,7 @@ io.on('connection', (socket) => {
         }
 
         // Notify existing peers in the room
-        socket.to(roomId).emit('peer-joined', { peerId: socket.id });
+        socket.to(roomId).emit('peer-joined', { peerId: socket.id, userName });
         if (typeof ack === 'function') ack({ success: true, routerId: router.id, workerPid: getRouterWorkerPid(router.id) });
       } catch (error) {
         console.error('join-room error:', error);
@@ -84,8 +86,16 @@ io.on('connection', (socket) => {
       // Remove from all rooms and notify peers
       for (const [roomId, members] of rooms.entries()) {
         if (members.delete(socket.id)) {
-          socket.to(roomId).emit('peer-left', { peerId: socket.id });
+          socket.to(roomId).emit('peer-left', { peerId: socket.id, userName: socket.userName });
           if (members.size === 0) rooms.delete(roomId);
+        }
+      }
+
+      // Garbage collect orphaned Mediasoup producers
+      for (const [pId, info] of producers.entries()) {
+        if (info.socketId === socket.id) {
+          try { info.producer.close(); } catch (e) { console.error('Error closing producer:', e); }
+          producers.delete(pId);
         }
       }
       console.log(`Socket disconnected: ${socket.id}`);
@@ -136,7 +146,8 @@ io.on('connection', (socket) => {
       const producer = await createProducer(data?.transportId, data?.kind, data?.rtpParameters);
       const routerId = socket.routerId;
       const roomId = socket.roomId;
-      producers.set(producer.id, { producer, socketId: socket.id, roomId, routerId });
+      const userName = socket.userName;
+      producers.set(producer.id, { producer, socketId: socket.id, roomId, routerId, userName });
       
       // Task 2.1: Eager Piping Mesh
       const roomRouters = getRoomRouters(roomId);
@@ -175,6 +186,7 @@ io.on('connection', (socket) => {
              producerId: id, 
              peerId: info.socketId,
              routerId: info.routerId,
+             peerName: info.userName,
              workerPid 
           });
         }

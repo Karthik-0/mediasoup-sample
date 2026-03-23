@@ -4,7 +4,8 @@ import { socket } from './lib/socket'
 import { startMeeting, consumeRemote } from './lib/meeting'
 import type { MeetingResult } from './lib/meeting'
 import { Button } from './components/ui/button'
-import { Mic, MicOff, VideoIcon, VideoOff } from 'lucide-react'
+import { Mic, MicOff, VideoIcon, VideoOff, PhoneOff } from 'lucide-react'
+import { uniqueNamesGenerator, adjectives, colors, animals } from 'unique-names-generator'
 
 function App() {
   const [notification, setNotification] = useState<string | null>(null)
@@ -12,9 +13,12 @@ function App() {
     setState('starting')
     setMeetingError(null)
     try {
+      const generatedName = uniqueNamesGenerator({ dictionaries: [adjectives, colors, animals], separator: ' ' });
+      const finalUserName = userNameInput.trim() || generatedName;
+
       const joinRes = await new Promise<{ success?: boolean; routerId?: string; workerPid?: number, error?: string }>((resolve) => {
         const timeout = setTimeout(() => resolve({ error: 'Request timed out' }), 8000)
-        socket.emit('join-room', { roomId: joinRoomId.trim() }, (res: any) => {
+        socket.emit('join-room', { roomId: joinRoomId.trim(), userName: finalUserName }, (res: any) => {
           clearTimeout(timeout)
           resolve(res)
         })
@@ -24,19 +28,19 @@ function App() {
       }
       const assignedRouterId = joinRes.routerId || joinRoomId.trim();
       setRouterId(assignedRouterId)
-      setParticipants([{ id: typeof socket.id === 'string' ? socket.id : '', isSelf: true, routerId: assignedRouterId, workerPid: joinRes.workerPid }])
+      setParticipants([{ id: typeof socket.id === 'string' ? socket.id : '', isSelf: true, routerId: assignedRouterId, workerPid: joinRes.workerPid, userName: finalUserName }])
       
       socket.off('peer-joined')
       socket.off('peer-left')
       // Listen for peer-joined/peer-left events
-      socket.on('peer-joined', ({ peerId }) => {
-        setParticipants((prev) => prev.some(p => p.id === peerId) ? prev : [...prev, { id: peerId, isSelf: false }])
-        setNotification(`Participant joined: ${peerId.slice(-6)}`)
+      socket.on('peer-joined', ({ peerId, userName }) => {
+        setParticipants((prev) => prev.some(p => p.id === peerId) ? prev : [...prev, { id: peerId, isSelf: false, userName }])
+        setNotification(`${userName || peerId.slice(-6)} joined`)
         setTimeout(() => setNotification(null), 3000)
       })
-      socket.on('peer-left', ({ peerId }) => {
+      socket.on('peer-left', ({ peerId, userName }) => {
         setParticipants((prev) => prev.filter(p => p.id !== peerId))
-        setNotification(`Participant left: ${peerId.slice(-6)}`)
+        setNotification(`${userName || peerId.slice(-6)} left`)
         setTimeout(() => setNotification(null), 3000)
       })
       const result = await startMeeting(assignedRouterId, socket)
@@ -53,9 +57,10 @@ function App() {
   const [videoOff, setVideoOff] = useState(false)
   const [routerId, setRouterId] = useState<string | null>(null)
   const [joinRoomId, setJoinRoomId] = useState('')
+  const [userNameInput, setUserNameInput] = useState('')
   const [showDiagnostics, setShowDiagnostics] = useState(false)
   // Multi-participant state
-  const [participants, setParticipants] = useState<{ id: string; isSelf: boolean; stream?: MediaStream, routerId?: string, workerPid?: number }[]>([])
+  const [participants, setParticipants] = useState<{ id: string; isSelf: boolean; stream?: MediaStream, routerId?: string, workerPid?: number, userName?: string }[]>([])
 
   const videoRef = useRef<HTMLVideoElement>(null)
   const remoteVideoRefs = useRef<{ [peerId: string]: HTMLVideoElement | null }>({})
@@ -75,7 +80,7 @@ function App() {
     if (state !== 'active' || !routerId || !meetingRef.current) return;
     // Get remote producer IDs
     async function fetchAndConsume() {
-      const res = await new Promise<{ producers: { producerId: string, peerId: string, routerId?: string, workerPid?: number }[], error?: string }>((resolve) => {
+      const res = await new Promise<{ producers: { producerId: string, peerId: string, peerName?: string, routerId?: string, workerPid?: number }[], error?: string }>((resolve) => {
         socket.emit('get-producers', { roomId: joinRoomId.trim() }, (r: any) => resolve(r));
       });
       
@@ -85,7 +90,7 @@ function App() {
       }
       
       // For each producer, consume if not already present
-      for (const { producerId, peerId, routerId: peerRouterId, workerPid } of res.producers) {
+      for (const { producerId, peerId, peerName, routerId: peerRouterId, workerPid } of res.producers) {
         if (!consumedProducersRef.current.has(producerId)) {
           consumedProducersRef.current.add(producerId);
           try {
@@ -106,11 +111,11 @@ function App() {
                   newStream = new MediaStream([...existingTracks, ...newTracks]);
                 }
                 const newArr = [...prev];
-                newArr[existingIndex] = { ...existing, stream: newStream, routerId: peerRouterId, workerPid };
+                newArr[existingIndex] = { ...existing, stream: newStream, routerId: peerRouterId, workerPid, userName: peerName || existing.userName };
                 return newArr;
               } else {
                 // If this is the highest-level state introduction to this peer, add them fully.
-                return [...prev, { id: peerId, isSelf: false, stream, routerId: peerRouterId, workerPid }];
+                return [...prev, { id: peerId, isSelf: false, stream, routerId: peerRouterId, workerPid, userName: peerName }];
               }
             });
           } catch (err) {
@@ -161,11 +166,13 @@ function App() {
   const debugInfo = {
     roomName: joinRoomId.trim(),
     localPeer: participants.find(p => p.isSelf) ? {
+      name: participants.find(p => p.isSelf)!.userName,
       id: participants.find(p => p.isSelf)!.id,
       routerId: participants.find(p => p.isSelf)!.routerId,
       workerPid: participants.find(p => p.isSelf)!.workerPid,
     } : null,
     remotePeers: participants.filter(p => !p.isSelf).map(p => ({
+      name: p.userName,
       id: p.id,
       routerId: p.routerId,
       workerPid: p.workerPid,
@@ -239,6 +246,14 @@ function App() {
             <div className="flex flex-col gap-4">
               <input
                 type="text"
+                placeholder="Enter your name (optional)"
+                value={userNameInput}
+                onChange={e => setUserNameInput(e.target.value)}
+                className="w-full px-4 py-3 bg-white dark:bg-neutral-900/50 border border-neutral-200 dark:border-neutral-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/50 text-neutral-900 dark:text-white transition-all shadow-sm"
+                disabled={state === 'starting'}
+              />
+              <input
+                type="text"
                 placeholder="Enter custom room name (e.g. Weekly Sync)"
                 value={joinRoomId}
                 onChange={e => setJoinRoomId(e.target.value)}
@@ -301,7 +316,7 @@ function App() {
                 {/* Peer ID & Diagnostic Topology Badge */}
                 <div className="absolute bottom-4 left-4 flex flex-col gap-2 z-20">
                   <div className="bg-black/60 backdrop-blur-sm px-3 py-1.5 rounded-lg text-xs font-medium text-white border border-white/10 shadow-lg inline-flex w-max">
-                    {p.isSelf ? 'You' : `Peer ${p.id.slice(-4)}`}
+                    {p.isSelf ? `You (${p.userName})` : `${p.userName || 'Unknown'} (${p.id.slice(-4)})`}
                   </div>
                   {p.routerId && (
                     <div className="bg-indigo-600/80 backdrop-blur-md px-2 py-1 rounded-md text-[10px] uppercase tracking-wider font-semibold text-white/90 border border-indigo-400/30 shadow-lg inline-flex w-max items-center gap-1.5">
@@ -329,6 +344,15 @@ function App() {
                       className={`rounded-full h-10 w-10 shadow-lg transition-all cursor-pointer ${!videoOff && 'bg-white/20 hover:bg-white/30 text-white backdrop-blur-md border border-white/10'}`}
                     >
                       {videoOff ? <VideoOff className="h-4 w-4" /> : <VideoIcon className="h-4 w-4" />}
+                    </Button>
+                    <div className="w-px h-6 bg-white/20 my-auto mx-1"></div>
+                    <Button 
+                      onClick={() => window.location.reload()} 
+                      variant="destructive"
+                      className="rounded-full shadow-lg transition-all cursor-pointer flex items-center gap-2 px-4 shadow-red-500/20"
+                    >
+                      <PhoneOff className="h-4 w-4" />
+                      <span className="font-medium text-xs">Leave</span>
                     </Button>
                   </div>
                 )}
