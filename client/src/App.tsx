@@ -249,6 +249,7 @@ function App() {
                 placeholder="Enter your name (optional)"
                 value={userNameInput}
                 onChange={e => setUserNameInput(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && joinRoomId.trim() && handleJoinMeeting()}
                 className="w-full px-4 py-3 bg-white dark:bg-neutral-900/50 border border-neutral-200 dark:border-neutral-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/50 text-neutral-900 dark:text-white transition-all shadow-sm"
                 disabled={state === 'starting'}
               />
@@ -257,6 +258,7 @@ function App() {
                 placeholder="Enter custom room name (e.g. Weekly Sync)"
                 value={joinRoomId}
                 onChange={e => setJoinRoomId(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && joinRoomId.trim() && handleJoinMeeting()}
                 className="w-full px-4 py-3 bg-white dark:bg-neutral-900/50 border border-neutral-200 dark:border-neutral-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/50 text-neutral-900 dark:text-white transition-all shadow-sm"
                 disabled={state === 'starting'}
               />
