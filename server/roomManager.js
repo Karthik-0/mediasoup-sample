@@ -46,11 +46,32 @@ async function getOrCreateRouter(roomId) {
 
   // All routers full or none exist -> spawn new shard on distributed worker
   const workers = getMediasoupWorkers();
-  const worker = workers[nextWorkerIndex % workers.length];
+  
+  const usedWorkerPids = new Set();
+  const roomRouterIds = rooms.get(roomId);
+  if (roomRouterIds) {
+    for (const rId of roomRouterIds) {
+      usedWorkerPids.add(getRouterWorkerPid(rId));
+    }
+  }
+
+  const availableWorkers = workers.filter(w => !usedWorkerPids.has(w.pid));
+  
+  if (availableWorkers.length === 0 && roomRouterIds && roomRouterIds.size > 0) {
+    // Cluster capacity reached for this room (all workers host a shard).
+    // Force-allocate to the first existing shard regardless of MAX_PEERS to prevent UUID collisions on PipeTransports
+    const fallbackId = Array.from(roomRouterIds)[0];
+    return { router: routers.get(fallbackId).router, isNew: false };
+  }
+
+  const worker = availableWorkers.length > 0 
+      ? availableWorkers[nextWorkerIndex % availableWorkers.length] 
+      : workers[nextWorkerIndex % workers.length];
+      
   nextWorkerIndex++;
 
   const router = await worker.createRouter({ mediaCodecs: ROUTER_MEDIA_CODECS });
-  routers.set(router.id, { router, peerCount: 0 });
+  routers.set(router.id, { router, peerCount: 0, workerPid: worker.pid });
   routerIds.add(router.id);
   
   return { router, isNew: true };
@@ -58,6 +79,10 @@ async function getOrCreateRouter(roomId) {
 
 function getRouter(id) {
   return routers.get(id)?.router;
+}
+
+function getRouterWorkerPid(id) {
+  return routers.get(id)?.workerPid;
 }
 
 function getRoomRouters(roomId) {
@@ -78,6 +103,7 @@ function removePeerFromRouter(routerId) {
 module.exports = { 
   getOrCreateRouter, 
   getRouter, 
+  getRouterWorkerPid,
   getRoomRouters,
   addPeerToRouter,
   removePeerFromRouter

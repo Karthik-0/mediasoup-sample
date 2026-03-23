@@ -5,7 +5,7 @@ const runtime = {
 };
 
 function resolveWorkerCount() {
-  const parsedCount = Number.parseInt(process.env.MEDIASOUP_WORKERS ?? '1', 10);
+  const parsedCount = Number.parseInt(process.env.MEDIASOUP_WORKERS ?? '4', 10);
   if (!Number.isFinite(parsedCount) || parsedCount < 1) {
     return 1;
   }

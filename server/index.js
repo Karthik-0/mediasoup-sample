@@ -6,7 +6,7 @@ const {
   closeMediasoupWorkers,
   getMediasoupWorkers,
 } = require('./mediasoupBootstrap');
-const { getRouter, getOrCreateRouter, getRoomRouters, addPeerToRouter, removePeerFromRouter } = require('./roomManager');
+const { getRouter, getOrCreateRouter, getRoomRouters, addPeerToRouter, removePeerFromRouter, getRouterWorkerPid } = require('./roomManager');
 const {
   createWebRtcTransport,
   connectTransport,
@@ -71,7 +71,7 @@ io.on('connection', (socket) => {
 
         // Notify existing peers in the room
         socket.to(roomId).emit('peer-joined', { peerId: socket.id });
-        if (typeof ack === 'function') ack({ success: true, routerId: router.id });
+        if (typeof ack === 'function') ack({ success: true, routerId: router.id, workerPid: getRouterWorkerPid(router.id) });
       } catch (error) {
         console.error('join-room error:', error);
         if (typeof ack === 'function') ack({ error: error.message });
@@ -92,18 +92,7 @@ io.on('connection', (socket) => {
     });
   console.log(`Socket connected: ${socket.id}`);
 
-  socket.on('create-router', async (ack) => {
-    try {
-      const roomId = require('crypto').randomUUID();
-      // Initialize the first shard explicitly
-      await getOrCreateRouter(roomId);
-      console.log(`Room created: ${roomId} (socket=${socket.id})`);
-      if (typeof ack === 'function') ack({ roomId });
-    } catch (error) {
-      console.error('Failed to create room:', error);
-      if (typeof ack === 'function') ack({ error: error.message });
-    }
-  });
+  // Socket.io 'create-router' event was completely removed in favor of implicit 'join-room' creation.
 
   socket.on('get-rtp-capabilities', (data, ack) => {
     try {
@@ -181,7 +170,13 @@ io.on('connection', (socket) => {
       const producersList = [];
       for (const [id, info] of producers.entries()) {
         if (info.roomId === roomId && info.socketId !== socket.id) {
-          producersList.push({ producerId: id, peerId: info.socketId });
+          const workerPid = getRouterWorkerPid(info.routerId);
+          producersList.push({ 
+             producerId: id, 
+             peerId: info.socketId,
+             routerId: info.routerId,
+             workerPid 
+          });
         }
       }
       console.log(`get-producers called by ${socket.id} for room ${roomId}: found ${producersList.length} producers`);
