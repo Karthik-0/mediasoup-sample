@@ -12,9 +12,9 @@ function App() {
     setState('starting')
     setMeetingError(null)
     try {
-      const joinRes = await new Promise<{ success?: boolean; error?: string }>((resolve) => {
+      const joinRes = await new Promise<{ success?: boolean; routerId?: string; error?: string }>((resolve) => {
         const timeout = setTimeout(() => resolve({ error: 'Request timed out' }), 8000)
-        socket.emit('join-room', { roomId: joinRoomId.trim() }, (res: { success?: boolean; error?: string }) => {
+        socket.emit('join-room', { roomId: joinRoomId.trim() }, (res: { success?: boolean; routerId?: string; error?: string }) => {
           clearTimeout(timeout)
           resolve(res)
         })
@@ -22,7 +22,7 @@ function App() {
       if (joinRes.error || !joinRes.success) {
         throw new Error(joinRes.error ?? 'Failed to join room')
       }
-      setRouterId(joinRoomId.trim())
+      setRouterId(joinRes.routerId || joinRoomId.trim())
       setParticipants([{ id: typeof socket.id === 'string' ? socket.id : '', isSelf: true }])
       
       socket.off('peer-joined')
@@ -130,21 +130,23 @@ function App() {
 
     try {
         setParticipants([{ id: typeof socket.id === 'string' ? socket.id : '', isSelf: true }])
-      const routerRes = await new Promise<{ routerId?: string; error?: string }>((resolve) => {
+      const routerRes = await new Promise<{ roomId?: string; routerId?: string; error?: string }>((resolve) => {
         const timeout = setTimeout(() => resolve({ error: 'Request timed out' }), 8000)
-        socket.emit('create-router', (res: { routerId?: string; error?: string }) => {
+        socket.emit('create-router', (res: { roomId?: string; routerId?: string; error?: string }) => {
           clearTimeout(timeout)
           resolve(res)
         })
       })
 
-      if (routerRes.error || !routerRes.routerId) {
-        throw new Error(routerRes.error ?? 'Failed to create router')
+      if (routerRes.error || (!routerRes.roomId && !routerRes.routerId)) {
+        throw new Error(routerRes.error ?? 'Failed to create room')
       }
+      
+      const newRoomId = routerRes.roomId || routerRes.routerId;
 
-      const joinRes = await new Promise<{ success?: boolean; error?: string }>((resolve) => {
+      const joinRes = await new Promise<{ success?: boolean; routerId?: string; error?: string }>((resolve) => {
         const timeout = setTimeout(() => resolve({ error: 'Request timed out' }), 8000)
-        socket.emit('join-room', { roomId: routerRes.routerId }, (res: { success?: boolean; error?: string }) => {
+        socket.emit('join-room', { roomId: newRoomId }, (res: { success?: boolean; routerId?: string; error?: string }) => {
           clearTimeout(timeout)
           resolve(res)
         })
@@ -154,7 +156,8 @@ function App() {
         throw new Error(joinRes.error ?? 'Failed to join room')
       }
 
-      setRouterId(routerRes.routerId)
+      setRouterId(joinRes.routerId || (newRoomId as string))
+      setJoinRoomId(newRoomId as string)
       setParticipants([{ id: typeof socket.id === 'string' ? socket.id : '', isSelf: true }])
       
       socket.off('peer-joined')
@@ -170,7 +173,8 @@ function App() {
         setNotification(`Participant left: ${peerId.slice(-6)}`)
         setTimeout(() => setNotification(null), 3000)
       })
-      const result = await startMeeting(routerRes.routerId, socket)
+      const finalRouterId = joinRes.routerId || (newRoomId as string);
+      const result = await startMeeting(finalRouterId, socket)
       meetingRef.current = result
       setState('active')
     } catch (err) {

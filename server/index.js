@@ -6,7 +6,7 @@ const {
   closeMediasoupWorkers,
   getMediasoupWorkers,
 } = require('./mediasoupBootstrap');
-const { createRouter, getRouter } = require('./roomManager');
+const { getRouter, getOrCreateRouter, getRoomRouters, addPeerToRouter, removePeerFromRouter } = require('./roomManager');
 const {
   createWebRtcTransport,
   connectTransport,
@@ -34,17 +34,44 @@ io.on('connection', (socket) => {
     const producers = io.producersMap = io.producersMap || new Map();
 
 
-    // join-room event: { roomId }, ack({ success, error })
-    socket.on('join-room', (data, ack) => {
+    // join-room event: { roomId }, ack({ success, routerId, error })
+    socket.on('join-room', async (data, ack) => {
       try {
         const roomId = data?.roomId;
         if (!roomId) return ack && ack({ error: 'Missing roomId' });
+        
+        // Task 1.2 & 3.2: Allocate to a router shard
+        const { router, isNew } = await getOrCreateRouter(roomId);
+        
         if (!rooms.has(roomId)) rooms.set(roomId, new Set());
         rooms.get(roomId).add(socket.id);
         socket.join(roomId);
+        
+        // Track shard attachment for cleanup
+        socket.roomId = roomId;
+        socket.routerId = router.id;
+        addPeerToRouter(router.id);
+        
+        // Task 2.2: Retroactive historical piping for a newly populated shard
+        if (isNew) {
+           for (const [pId, info] of producers.entries()) {
+             if (info.roomId === roomId && info.routerId !== router.id) {
+                const sourceRouter = getRouter(info.routerId);
+                if (sourceRouter) {
+                   try {
+                     await sourceRouter.pipeToRouter({ producerId: pId, router: router });
+                     console.log(`Historical pipe from ${sourceRouter.id} to new shard ${router.id} for producer ${pId}`);
+                   } catch(e) {
+                     console.error('Historical pipe failed', e);
+                   }
+                }
+             }
+           }
+        }
+
         // Notify existing peers in the room
         socket.to(roomId).emit('peer-joined', { peerId: socket.id });
-        if (typeof ack === 'function') ack({ success: true });
+        if (typeof ack === 'function') ack({ success: true, routerId: router.id });
       } catch (error) {
         console.error('join-room error:', error);
         if (typeof ack === 'function') ack({ error: error.message });
@@ -52,6 +79,8 @@ io.on('connection', (socket) => {
     });
 
     socket.on('disconnect', () => {
+      if (socket.routerId) removePeerFromRouter(socket.routerId);
+      
       // Remove from all rooms and notify peers
       for (const [roomId, members] of rooms.entries()) {
         if (members.delete(socket.id)) {
@@ -65,11 +94,13 @@ io.on('connection', (socket) => {
 
   socket.on('create-router', async (ack) => {
     try {
-      const router = await createRouter();
-      console.log(`Router created: ${router.id} (socket=${socket.id})`);
-      if (typeof ack === 'function') ack({ routerId: router.id });
+      const roomId = require('crypto').randomUUID();
+      // Initialize the first shard explicitly
+      await getOrCreateRouter(roomId);
+      console.log(`Room created: ${roomId} (socket=${socket.id})`);
+      if (typeof ack === 'function') ack({ roomId });
     } catch (error) {
-      console.error('Failed to create router:', error);
+      console.error('Failed to create room:', error);
       if (typeof ack === 'function') ack({ error: error.message });
     }
   });
@@ -114,7 +145,27 @@ io.on('connection', (socket) => {
   socket.on('produce', async (data, ack) => {
     try {
       const producer = await createProducer(data?.transportId, data?.kind, data?.rtpParameters);
-      producers.set(producer.id, { producer, socketId: socket.id, roomId: data?.roomId });
+      const routerId = socket.routerId;
+      const roomId = socket.roomId;
+      producers.set(producer.id, { producer, socketId: socket.id, roomId, routerId });
+      
+      // Task 2.1: Eager Piping Mesh
+      const roomRouters = getRoomRouters(roomId);
+      const sourceRouter = getRouter(routerId);
+      
+      if (sourceRouter) {
+          for (const targetRouter of roomRouters) {
+              if (targetRouter.id !== sourceRouter.id) {
+                  try {
+                      await sourceRouter.pipeToRouter({ producerId: producer.id, router: targetRouter });
+                      console.log(`Eager pipe from ${sourceRouter.id} to sibling ${targetRouter.id} for producer ${producer.id}`);
+                  } catch (e) {
+                      console.error('Eager pipe failed', e);
+                  }
+              }
+          }
+      }
+
       console.log(`Producer created: ${producer.id} kind=${producer.kind} (socket=${socket.id})`);
       ack({ id: producer.id });
     } catch (error) {
