@@ -72,15 +72,20 @@ export async function startMeeting(routerId: string, socket: Socket): Promise<Me
   return { stream, audioProducer, videoProducer, device, sendTransport: transport };
 }
 
+export interface ConsumeRemoteResult {
+  stream: MediaStream;
+  recvTransport: Transport;
+}
+
 /**
- * Consume a remote producer and return a MediaStream.
+ * Consume a remote producer and return a stream and recv transport.
  */
 export async function consumeRemote(
   socket: Socket,
   device: Device,
   routerId: string,
   producerId: string
-): Promise<MediaStream> {
+): Promise<ConsumeRemoteResult> {
   // 1. Create a recv transport if not already created
   // (For simplicity, create a new one per consumer)
   const transportParams = await emit<{
@@ -114,5 +119,5 @@ export async function consumeRemote(
   });
   // 4. Create MediaStream from consumer track
   const stream = new MediaStream([consumer.track]);
-  return stream;
+  return { stream, recvTransport };
 }

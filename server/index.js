@@ -1,6 +1,8 @@
 const http = require('http');
 const express = require('express');
 const { Server: SocketIOServer } = require('socket.io');
+const os = require('os');
+const pidusage = require('pidusage');
 const {
   createMediasoupWorkers,
   closeMediasoupWorkers,
@@ -230,6 +232,33 @@ io.on('connection', (socket) => {
       });
     } catch (error) {
       ack({ error: error.message });
+    }
+  });
+
+  socket.on('get-stats', async (_data, ack) => {
+    try {
+      const workers = getMediasoupWorkers();
+      const workerStats = await Promise.all(
+        workers.map(async (w) => {
+          try {
+            const stats = await pidusage(w.pid);
+            return { pid: w.pid, cpu: stats.cpu, memory: stats.memory };
+          } catch (_e) {
+            return { pid: w.pid, cpu: 0, memory: 0 };
+          }
+        })
+      );
+
+      const systemStats = {
+        cpuLoad: os.loadavg()[0],
+        memFree: os.freemem(),
+        memTotal: os.totalmem(),
+        uptime: os.uptime()
+      };
+
+      ack({ systemStats, workerStats });
+    } catch (err) {
+      ack({ error: err.message });
     }
   });
 

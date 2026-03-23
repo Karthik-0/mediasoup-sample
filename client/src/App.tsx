@@ -7,6 +7,108 @@ import { Button } from './components/ui/button'
 import { Mic, MicOff, VideoIcon, VideoOff, PhoneOff } from 'lucide-react'
 import { uniqueNamesGenerator, adjectives, colors, animals } from 'unique-names-generator'
 
+function ResourceMonitorCard({
+  hardwareStats,
+  myWorkerPid,
+  inMeeting,
+}: {
+  hardwareStats: any;
+  myWorkerPid: number | undefined;
+  inMeeting: boolean;
+}) {
+  const [minimized, setMinimized] = useState(false);
+
+  function workerCpuColor(pct: number) {
+    if (pct > 80) return 'text-red-400';
+    if (pct > 60) return 'text-yellow-400';
+    return 'text-green-400';
+  }
+
+  function memPctColor(pct: number) {
+    if (pct > 85) return 'text-red-400';
+    if (pct > 70) return 'text-yellow-400';
+    return 'text-green-400';
+  }
+
+  function loadColor(load: number) {
+    if (load > 2.0) return 'text-red-400';
+    if (load > 1.0) return 'text-yellow-400';
+    return 'text-green-400';
+  }
+
+  const sys = hardwareStats?.systemStats;
+  const workerStats: Array<{ pid: number; cpu: number; memory: number }> = hardwareStats?.workerStats ?? [];
+  const memPct = sys ? Math.round((1 - sys.memFree / sys.memTotal) * 100) : null;
+  const memTotalGB = sys ? (sys.memTotal / 1024 / 1024 / 1024).toFixed(1) : null;
+
+  return (
+    <div className="bg-black/80 backdrop-blur-md border border-white/20 rounded-xl shadow-2xl text-[10px] font-mono text-neutral-300 w-56">
+      <div className="flex justify-between items-center px-3 py-2 border-b border-white/10">
+        <span className="text-white font-bold tracking-wider text-[10px]">RESOURCE MONITOR</span>
+        <button
+          onClick={() => setMinimized(m => !m)}
+          className="bg-white/10 hover:bg-white/20 px-2 py-0.5 rounded text-white transition-colors cursor-pointer text-[10px] leading-none"
+        >
+          {minimized ? '+' : '−'}
+        </button>
+      </div>
+      {!minimized && (
+        <div className="px-3 py-2 flex flex-col gap-2">
+          <div>
+            <div className="text-neutral-500 uppercase tracking-widest text-[9px] mb-1">System</div>
+            <div className="flex justify-between">
+              <span>CPU</span>
+              {sys ? (
+                <span className={loadColor(sys.cpuLoad)}>
+                  {sys.cpuLoad.toFixed(2)}<span className="text-neutral-500 ml-1">load</span>
+                </span>
+              ) : <span className="text-neutral-500">—</span>}
+            </div>
+            <div className="flex justify-between">
+              <span>MEM</span>
+              {memPct !== null ? (
+                <span className={memPctColor(memPct)}>
+                  {memPct}%<span className="text-neutral-500 ml-1">{memTotalGB}GB</span>
+                </span>
+              ) : <span className="text-neutral-500">—</span>}
+            </div>
+          </div>
+          <div>
+            <div className="text-neutral-500 uppercase tracking-widest text-[9px] mb-1">
+              Workers ({workerStats.length})
+            </div>
+            {workerStats.length === 0 && <span className="text-neutral-500">—</span>}
+            {workerStats.map((w) => {
+              const isMine = w.pid === myWorkerPid;
+              return (
+                <div key={w.pid} className={`flex justify-between ${isMine ? 'text-cyan-300' : ''}`}>
+                  <span>{isMine ? '● ' : '\u00a0\u00a0'}W{w.pid}</span>
+                  <span className={workerCpuColor(w.cpu)}>{w.cpu.toFixed(1)}%</span>
+                </div>
+              );
+            })}
+          </div>
+          <div>
+            <div className="text-neutral-500 uppercase tracking-widest text-[9px] mb-1">Bandwidth</div>
+            {inMeeting ? (
+              <div className="flex justify-between">
+                <span className="text-green-400">
+                  ↑ {hardwareStats?.sendBitrate != null ? `${hardwareStats.sendBitrate} kbps` : '—'}
+                </span>
+                <span className="text-blue-400">
+                  ↓ {hardwareStats?.recvBitrate != null ? `${hardwareStats.recvBitrate} kbps` : '—'}
+                </span>
+              </div>
+            ) : (
+              <span className="text-neutral-500">—</span>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function App() {
   const [notification, setNotification] = useState<string | null>(null)
   async function handleJoinMeeting() {
@@ -59,6 +161,7 @@ function App() {
   const [joinRoomId, setJoinRoomId] = useState('')
   const [userNameInput, setUserNameInput] = useState('')
   const [showDiagnostics, setShowDiagnostics] = useState(false)
+  const [hardwareStats, setHardwareStats] = useState<any>(null)
   // Multi-participant state
   const [participants, setParticipants] = useState<{ id: string; isSelf: boolean; stream?: MediaStream, routerId?: string, workerPid?: number, userName?: string }[]>([])
 
@@ -68,6 +171,10 @@ function App() {
   
   // Track consumed producers so we don't consume audio/video twice
   const consumedProducersRef = useRef<Set<string>>(new Set())
+  // Accumulate recv transports for downlink bandwidth measurement
+  const recvTransportsRef = useRef<any[]>([])
+  // Previous byte counts for bitrate delta computation
+  const prevBytesRef = useRef<{ sent: number; received: number; ts: number } | null>(null)
 
   useEffect(() => {
     if (state === 'active' && videoRef.current && meetingRef.current) {
@@ -95,8 +202,9 @@ function App() {
           consumedProducersRef.current.add(producerId);
           try {
             if (!meetingRef.current || !routerId) continue;
-            const stream = await consumeRemote(socket, meetingRef.current.device, routerId as string, producerId);
-            
+            const { stream, recvTransport } = await consumeRemote(socket, meetingRef.current.device, routerId as string, producerId);
+            recvTransportsRef.current.push(recvTransport);
+
             setParticipants(prev => {
               const existingIndex = prev.findIndex(p => p.id === peerId);
               if (existingIndex >= 0) {
@@ -163,6 +271,72 @@ function App() {
     }
   }
 
+  // Poll server for system and all-worker stats every 3s
+  useEffect(() => {
+    const statsInterval = setInterval(() => {
+      socket.emit('get-stats', {}, (res: any) => {
+        if (res && !res.error) {
+          setHardwareStats((prev: any) => ({
+            ...(prev ?? {}),
+            systemStats: res.systemStats,
+            workerStats: res.workerStats,
+          }));
+        }
+      });
+    }, 3000);
+    return () => clearInterval(statsInterval);
+  }, []);
+
+  // Poll RTCPeerConnection stats for bandwidth when in a meeting
+  useEffect(() => {
+    if (state !== 'active') return;
+    const bwInterval = setInterval(async () => {
+      const sendTransport = meetingRef.current?.sendTransport;
+      if (!sendTransport) return;
+      try {
+        let totalBytesSent = 0;
+        const sendStats = await sendTransport.getStats();
+        sendStats.forEach((report: any) => {
+          if (report.type === 'outbound-rtp' && typeof report.bytesSent === 'number') {
+            totalBytesSent += report.bytesSent;
+          }
+        });
+
+        let totalBytesReceived = 0;
+        for (const recvTransport of recvTransportsRef.current) {
+          try {
+            const recvStats = await recvTransport.getStats();
+            recvStats.forEach((report: any) => {
+              if (report.type === 'inbound-rtp' && typeof report.bytesReceived === 'number') {
+                totalBytesReceived += report.bytesReceived;
+              }
+            });
+          } catch (_e) { /* transport may be closed */ }
+        }
+
+        const now = Date.now();
+        if (prevBytesRef.current) {
+          const dt = now - prevBytesRef.current.ts;
+          const sendKbps = Math.max(0, Math.round((totalBytesSent - prevBytesRef.current.sent) * 8 / dt));
+          const recvKbps = Math.max(0, Math.round((totalBytesReceived - prevBytesRef.current.received) * 8 / dt));
+          setHardwareStats((prev: any) => ({
+            ...(prev ?? {}),
+            sendBitrate: sendKbps,
+            recvBitrate: recvKbps,
+          }));
+        }
+        prevBytesRef.current = { sent: totalBytesSent, received: totalBytesReceived, ts: now };
+      } catch (e) {
+        console.error('bandwidth stats error', e);
+      }
+    }, 3000);
+    return () => {
+      clearInterval(bwInterval);
+      prevBytesRef.current = null;
+      setHardwareStats((prev: any) => prev ? { ...prev, sendBitrate: null, recvBitrate: null } : null);
+    };
+  }, [state]);
+
   const debugInfo = {
     roomName: joinRoomId.trim(),
     localPeer: participants.find(p => p.isSelf) ? {
@@ -177,7 +351,20 @@ function App() {
       routerId: p.routerId,
       workerPid: p.workerPid,
       hasStream: !!p.stream,
-    }))
+    })),
+    telemetry: hardwareStats ? {
+      uplink: hardwareStats.sendBitrate != null ? `${hardwareStats.sendBitrate} kbps` : null,
+      downlink: hardwareStats.recvBitrate != null ? `${hardwareStats.recvBitrate} kbps` : null,
+      systemCPU: hardwareStats.systemStats?.cpuLoad?.toFixed(2) + ' (1m load)',
+      systemMemory: hardwareStats.systemStats?.memTotal
+        ? (100 - (hardwareStats.systemStats.memFree / hardwareStats.systemStats.memTotal) * 100).toFixed(1) + '%'
+        : null,
+      workers: (hardwareStats.workerStats ?? []).map((w: any) => ({
+        pid: w.pid,
+        cpu: w.cpu.toFixed(1) + '%',
+        mem: (w.memory / 1024 / 1024).toFixed(1) + 'MB',
+      })),
+    } : null
   };
 
   return (
@@ -194,13 +381,15 @@ function App() {
       )}
 
       {routerId && state === 'active' && (
-        <>
-          <div className="absolute top-6 left-6 z-40 bg-white/50 dark:bg-black/40 backdrop-blur-md border border-neutral-200 dark:border-white/10 px-4 py-2 rounded-xl shadow-lg flex items-center gap-3 transition-all">
-            <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
-            <p className="text-sm font-medium text-neutral-700 dark:text-white">Room: <code className="font-mono text-xs bg-black/5 dark:bg-black/50 px-2 py-1 rounded text-indigo-600 dark:text-purple-300 ml-1">{joinRoomId.trim() || routerId?.slice(0, 8)}</code></p>
-          </div>
-          
-          <div className={`absolute top-6 right-6 z-50 bg-black/80 backdrop-blur-md border border-white/20 p-4 rounded-xl shadow-2xl text-[10px] md:text-xs font-mono text-green-400 max-h-[80vh] transition-all duration-300 ${showDiagnostics ? 'w-72 md:w-96 overflow-auto' : 'w-auto overflow-hidden'}`}>
+        <div className="absolute top-6 left-6 z-40 bg-white/50 dark:bg-black/40 backdrop-blur-md border border-neutral-200 dark:border-white/10 px-4 py-2 rounded-xl shadow-lg flex items-center gap-3 transition-all">
+          <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
+          <p className="text-sm font-medium text-neutral-700 dark:text-white">Room: <code className="font-mono text-xs bg-black/5 dark:bg-black/50 px-2 py-1 rounded text-indigo-600 dark:text-purple-300 ml-1">{joinRoomId.trim() || routerId?.slice(0, 8)}</code></p>
+        </div>
+      )}
+
+      <div className="absolute top-6 right-6 z-50 flex flex-col gap-3 items-end">
+        {routerId && state === 'active' && (
+          <div className={`bg-black/80 backdrop-blur-md border border-white/20 p-4 rounded-xl shadow-2xl text-[10px] md:text-xs font-mono text-green-400 max-h-[80vh] transition-all duration-300 ${showDiagnostics ? 'w-72 md:w-96 overflow-auto' : 'w-auto overflow-hidden'}`}>
             <div className={`flex justify-between items-center ${showDiagnostics ? 'border-b border-white/10 pb-2 mb-4' : 'gap-4'}`}>
               <span className="text-white font-bold tracking-wider whitespace-nowrap">TOPOLOGY DIAGNOSTICS</span>
               <div className="flex gap-2">
@@ -226,8 +415,13 @@ function App() {
               </pre>
             )}
           </div>
-        </>
-      )}
+        )}
+        <ResourceMonitorCard
+          hardwareStats={hardwareStats}
+          myWorkerPid={participants.find(p => p.isSelf)?.workerPid}
+          inMeeting={state === 'active'}
+        />
+      </div>
 
       {state !== 'active' && (
         <div className="flex flex-col items-center justify-center flex-1 w-full max-w-md mx-auto relative z-10 px-4">
