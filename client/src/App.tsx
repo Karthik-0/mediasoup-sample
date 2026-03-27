@@ -1,4 +1,4 @@
-import { useRef, useState, useEffect } from 'react'
+import { useRef, useState, useEffect, type MutableRefObject, type RefObject } from 'react'
 import './App.css'
 import { socket } from './lib/socket'
 import { startMeeting, consumeRemote } from './lib/meeting'
@@ -6,6 +6,8 @@ import type { MeetingResult } from './lib/meeting'
 import { Button } from './components/ui/button'
 import { Mic, MicOff, VideoIcon, VideoOff, PhoneOff } from 'lucide-react'
 import { uniqueNamesGenerator, adjectives, colors, animals } from 'unique-names-generator'
+import { spawnBot } from './lib/bot'
+import type { BotHandle } from './lib/bot'
 
 function ResourceMonitorCard({
   hardwareStats,
@@ -109,6 +111,98 @@ function ResourceMonitorCard({
   );
 }
 
+function BotPanel({
+  roomId,
+  botsRef,
+  botCounterRef,
+  fileInputRef,
+  botCount,
+  onCountChange,
+}: {
+  roomId: string;
+  botsRef: MutableRefObject<BotHandle[]>;
+  botCounterRef: MutableRefObject<number>;
+  fileInputRef: RefObject<HTMLInputElement>;
+  botCount: number;
+  onCountChange: (n: number) => void;
+}) {
+  async function handleAddCanvasBot() {
+    botCounterRef.current++;
+    const botName = `Bot-${botCounterRef.current}`;
+    try {
+      const handle = await spawnBot(roomId, botName, { videoSource: 'canvas' }, botCounterRef.current);
+      botsRef.current.push(handle);
+      onCountChange(botsRef.current.length);
+    } catch (err) {
+      console.error('[BotPanel] canvas bot spawn error:', err);
+    }
+  }
+
+  function handleAddVideoBot() {
+    fileInputRef.current?.click();
+  }
+
+  async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    botCounterRef.current++;
+    const index = botCounterRef.current;
+    const botName = `Bot-${index}`;
+    try {
+      const handle = await spawnBot(roomId, botName, { videoSource: file }, index);
+      botsRef.current.push(handle);
+      onCountChange(botsRef.current.length);
+    } catch (err) {
+      console.error('[BotPanel] video bot spawn error:', err);
+    }
+    e.target.value = '';
+  }
+
+  function handleRemoveAll() {
+    botsRef.current.forEach(b => b.disconnect());
+    botsRef.current = [];
+    onCountChange(0);
+  }
+
+  return (
+    <div className="bg-black/80 backdrop-blur-md border border-yellow-500/40 rounded-xl shadow-2xl text-[10px] font-mono text-neutral-300 w-56">
+      <div className="flex justify-between items-center px-3 py-2 border-b border-white/10">
+        <span className="text-yellow-400 font-bold tracking-wider text-[10px]">DEV BOTS</span>
+        <span className="bg-yellow-500/20 text-yellow-300 px-2 py-0.5 rounded text-[9px]">Bots: {botCount}</span>
+      </div>
+      <div className="px-3 py-2 flex flex-col gap-1.5">
+        <button
+          onClick={handleAddCanvasBot}
+          className="w-full bg-white/10 hover:bg-white/20 px-2 py-1.5 rounded text-white transition-colors cursor-pointer text-[10px] text-left"
+        >
+          + Add Canvas Bot
+        </button>
+        <button
+          onClick={handleAddVideoBot}
+          className="w-full bg-white/10 hover:bg-white/20 px-2 py-1.5 rounded text-white transition-colors cursor-pointer text-[10px] text-left"
+        >
+          + Add Video Bot
+        </button>
+        {botCount > 0 && (
+          <button
+            onClick={handleRemoveAll}
+            className="w-full bg-red-500/20 hover:bg-red-500/30 px-2 py-1.5 rounded text-red-300 transition-colors cursor-pointer text-[10px] text-left"
+          >
+            ✕ Remove All
+          </button>
+        )}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="video/*"
+          className="hidden"
+          onChange={handleFileChange}
+        />
+      </div>
+    </div>
+  );
+}
+
 function App() {
   const [notification, setNotification] = useState<string | null>(null)
   async function handleJoinMeeting() {
@@ -175,6 +269,12 @@ function App() {
   const recvTransportsRef = useRef<any[]>([])
   // Previous byte counts for bitrate delta computation
   const prevBytesRef = useRef<{ sent: number; received: number; ts: number } | null>(null)
+
+  // Bot simulator (dev-only)
+  const botsRef = useRef<BotHandle[]>([])
+  const botCounterRef = useRef(0)
+  const botVideoFileInputRef = useRef<HTMLInputElement>(null)
+  const [botCount, setBotCount] = useState(0)
 
   useEffect(() => {
     if (state === 'active' && videoRef.current && meetingRef.current) {
@@ -421,6 +521,16 @@ function App() {
           myWorkerPid={participants.find(p => p.isSelf)?.workerPid}
           inMeeting={state === 'active'}
         />
+        {import.meta.env.DEV && state === 'active' && (
+          <BotPanel
+            roomId={joinRoomId.trim()}
+            botsRef={botsRef}
+            botCounterRef={botCounterRef}
+            fileInputRef={botVideoFileInputRef}
+            botCount={botCount}
+            onCountChange={setBotCount}
+          />
+        )}
       </div>
 
       {state !== 'active' && (
@@ -543,7 +653,11 @@ function App() {
                     </Button>
                     <div className="w-px h-6 bg-white/20 my-auto mx-1"></div>
                     <Button 
-                      onClick={() => window.location.reload()} 
+                      onClick={() => {
+                        botsRef.current.forEach(b => b.disconnect());
+                        botsRef.current = [];
+                        window.location.reload();
+                      }}
                       variant="destructive"
                       className="rounded-full shadow-lg transition-all cursor-pointer flex items-center gap-2 px-4 shadow-red-500/20"
                     >
