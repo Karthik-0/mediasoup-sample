@@ -282,6 +282,7 @@ function App() {
   const videoRef = useRef<HTMLVideoElement>(null)
   const remoteVideoRefs = useRef<{ [peerId: string]: HTMLVideoElement | null }>({})
   const meetingRef = useRef<MeetingResult | null>(null)
+  const participantsRef = useRef<MeetingParticipant[]>([])
   
   // Track consumed producers so we don't consume audio/video twice
   const consumedProducersRef = useRef<Set<string>>(new Set())
@@ -295,12 +296,17 @@ function App() {
   const botCounterRef = useRef(0)
   const botVideoFileInputRef = useRef<HTMLInputElement>(null)
   const [botCount, setBotCount] = useState(0)
+  const maxRemoteConsumes = MAX_MEETING_VIDEO_TILES
 
   useEffect(() => {
     if (state === 'active' && videoRef.current && meetingRef.current) {
       videoRef.current.srcObject = meetingRef.current.stream
     }
   }, [state])
+
+  useEffect(() => {
+    participantsRef.current = participants
+  }, [participants])
 
   useEffect(() => {
     const participantIds = new Set(participants.map((participant) => participant.id))
@@ -336,46 +342,91 @@ function App() {
         console.error('get-producers returned error:', res);
         return;
       }
-      
-      // For each producer, consume if not already present
-      for (const { producerId, peerId, peerName, routerId: peerRouterId, workerPid } of res.producers) {
-        if (!consumedProducersRef.current.has(producerId)) {
-          consumedProducersRef.current.add(producerId);
-          try {
-            if (!meetingRef.current || !routerId) continue;
-            const { stream, recvTransport } = await consumeRemote(socket, meetingRef.current.device, routerId as string, producerId);
-            recvTransportsRef.current.push(recvTransport);
 
-            setParticipants(prev => {
-              const existingIndex = prev.findIndex(p => p.id === peerId);
-              if (existingIndex >= 0) {
-                const existing = prev[existingIndex];
-                let newStream = stream;
-                if (existing.stream) {
-                  // Merge existing tracks with the new stream's tracks
-                  const existingTracks = existing.stream.getTracks();
-                  const newTracks = stream.getTracks().filter(nt => 
-                    !existingTracks.some(et => et.kind === nt.kind && et.id === nt.id)
-                  );
-                  newStream = new MediaStream([...existingTracks, ...newTracks]);
-                }
-                const newArr = [...prev];
-                newArr[existingIndex] = { ...existing, stream: newStream, routerId: peerRouterId, workerPid, userName: peerName || existing.userName };
-                return newArr;
-              } else {
-                // If this is the highest-level state introduction to this peer, add them fully.
-                return [...prev, { id: peerId, isSelf: false, stream, routerId: peerRouterId, workerPid, userName: peerName }];
+      // Keep participant metadata up to date for roster/ordering even when tracks are not consumed.
+      setParticipants((prev) => {
+        const next = [...prev]
+        let changed = false
+
+        for (const { peerId, peerName, routerId: peerRouterId, workerPid } of res.producers) {
+          const existingIndex = next.findIndex((participant) => participant.id === peerId)
+          if (existingIndex >= 0) {
+            const existing = next[existingIndex]
+            if (
+              existing.userName !== peerName ||
+              existing.routerId !== peerRouterId ||
+              existing.workerPid !== workerPid
+            ) {
+              next[existingIndex] = {
+                ...existing,
+                userName: peerName || existing.userName,
+                routerId: peerRouterId,
+                workerPid,
               }
-            });
-          } catch (err) {
-            console.error('Consume error:', err);
+              changed = true
+            }
+          } else {
+            next.push({
+              id: peerId,
+              isSelf: false,
+              userName: peerName,
+              routerId: peerRouterId,
+              workerPid,
+            })
+            changed = true
           }
+        }
+
+        return changed ? next : prev
+      })
+
+      // Hard cap remote media consumption to protect browser performance.
+      const activeConsumedRemoteCount = participantsRef.current.filter((participant) => !participant.isSelf && participant.stream).length
+      const availableSlots = Math.max(0, maxRemoteConsumes - activeConsumedRemoteCount)
+      if (availableSlots <= 0) {
+        return
+      }
+
+      const producersToConsume = res.producers
+        .filter(({ producerId }) => !consumedProducersRef.current.has(producerId))
+        .slice(0, availableSlots)
+      
+      // Consume only the selected producers for currently available media budget.
+      for (const { producerId, peerId, peerName, routerId: peerRouterId, workerPid } of producersToConsume) {
+        consumedProducersRef.current.add(producerId)
+        try {
+          if (!meetingRef.current || !routerId) continue;
+          const { stream, recvTransport } = await consumeRemote(socket, meetingRef.current.device, routerId as string, producerId);
+          recvTransportsRef.current.push(recvTransport);
+
+          setParticipants(prev => {
+            const existingIndex = prev.findIndex(p => p.id === peerId);
+            if (existingIndex >= 0) {
+              const existing = prev[existingIndex];
+              let newStream = stream;
+              if (existing.stream) {
+                // Merge existing tracks with the new stream's tracks
+                const existingTracks = existing.stream.getTracks();
+                const newTracks = stream.getTracks().filter(nt => 
+                  !existingTracks.some(et => et.kind === nt.kind && et.id === nt.id)
+                );
+                newStream = new MediaStream([...existingTracks, ...newTracks]);
+              }
+              const newArr = [...prev];
+              newArr[existingIndex] = { ...existing, stream: newStream, routerId: peerRouterId, workerPid, userName: peerName || existing.userName };
+              return newArr;
+            }
+            return [...prev, { id: peerId, isSelf: false, stream, routerId: peerRouterId, workerPid, userName: peerName }];
+          });
+        } catch (err) {
+          console.error('Consume error:', err);
+          consumedProducersRef.current.delete(producerId)
         }
       }
     }
     
     fetchAndConsume();
-    const intervalId = setInterval(fetchAndConsume, 2000);
+    const intervalId = setInterval(fetchAndConsume, 3000);
     
     return () => clearInterval(intervalId);
   }, [state, routerId, joinRoomId]); // Removed participants from deps to prevent interval reset on every join
