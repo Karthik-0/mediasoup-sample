@@ -4,10 +4,18 @@ import { socket } from './lib/socket'
 import { startMeeting, consumeRemote } from './lib/meeting'
 import type { MeetingResult } from './lib/meeting'
 import { Button } from './components/ui/button'
-import { Mic, MicOff, VideoIcon, VideoOff, PhoneOff } from 'lucide-react'
 import { uniqueNamesGenerator, adjectives, colors, animals } from 'unique-names-generator'
 import { spawnBot } from './lib/bot'
 import type { BotHandle } from './lib/bot'
+import {
+  buildMeetingLayoutModel,
+  GALLERY_PAGE_SIZE,
+  MAX_MEETING_VIDEO_TILES,
+  type MeetingLayoutMode,
+  type MeetingParticipant,
+} from './lib/meeting-layout'
+import { LargeMeetingLayout } from './components/meeting/LargeMeetingLayout'
+import { MeetingControlBar } from './components/meeting/MeetingControlBar'
 
 function ResourceMonitorCard({
   hardwareStats,
@@ -224,6 +232,12 @@ function App() {
       }
       const assignedRouterId = joinRes.routerId || joinRoomId.trim();
       setRouterId(assignedRouterId)
+      setLayoutMode('speaker')
+      setGalleryPage(0)
+      setParticipantPanelOpen(false)
+      setPinnedParticipantIds([])
+      setSpotlightParticipantId(null)
+      setRaisedHandParticipantIds([])
       setParticipants([{ id: typeof socket.id === 'string' ? socket.id : '', isSelf: true, routerId: assignedRouterId, workerPid: joinRes.workerPid, userName: finalUserName }])
       
       socket.off('peer-joined')
@@ -257,7 +271,13 @@ function App() {
   const [showDiagnostics, setShowDiagnostics] = useState(false)
   const [hardwareStats, setHardwareStats] = useState<any>(null)
   // Multi-participant state
-  const [participants, setParticipants] = useState<{ id: string; isSelf: boolean; stream?: MediaStream, routerId?: string, workerPid?: number, userName?: string }[]>([])
+  const [participants, setParticipants] = useState<MeetingParticipant[]>([])
+  const [layoutMode, setLayoutMode] = useState<MeetingLayoutMode>('speaker')
+  const [galleryPage, setGalleryPage] = useState(0)
+  const [participantPanelOpen, setParticipantPanelOpen] = useState(false)
+  const [pinnedParticipantIds, setPinnedParticipantIds] = useState<string[]>([])
+  const [spotlightParticipantId, setSpotlightParticipantId] = useState<string | null>(null)
+  const [raisedHandParticipantIds, setRaisedHandParticipantIds] = useState<string[]>([])
 
   const videoRef = useRef<HTMLVideoElement>(null)
   const remoteVideoRefs = useRef<{ [peerId: string]: HTMLVideoElement | null }>({})
@@ -281,6 +301,27 @@ function App() {
       videoRef.current.srcObject = meetingRef.current.stream
     }
   }, [state])
+
+  useEffect(() => {
+    const participantIds = new Set(participants.map((participant) => participant.id))
+    setPinnedParticipantIds((prev) => prev.filter((participantId) => participantIds.has(participantId)))
+    setRaisedHandParticipantIds((prev) => prev.filter((participantId) => participantIds.has(participantId)))
+    setSpotlightParticipantId((prev) => (prev && participantIds.has(prev) ? prev : null))
+  }, [participants])
+
+  useEffect(() => {
+    if (layoutMode !== 'gallery') {
+      if (galleryPage !== 0) {
+        setGalleryPage(0)
+      }
+      return
+    }
+
+    const totalPages = Math.max(1, Math.ceil(participants.length / GALLERY_PAGE_SIZE))
+    if (galleryPage > totalPages - 1) {
+      setGalleryPage(totalPages - 1)
+    }
+  }, [galleryPage, layoutMode, participants.length])
 
   // Fetch and consume remote producers when meeting becomes active or participants change
   useEffect(() => {
@@ -371,6 +412,44 @@ function App() {
     }
   }
 
+  function handleLeaveMeeting() {
+    botsRef.current.forEach((bot) => bot.disconnect())
+    botsRef.current = []
+    window.location.reload()
+  }
+
+  function toggleParticipantPin(participantId: string) {
+    setPinnedParticipantIds((prev) =>
+      prev.includes(participantId) ? prev.filter((id) => id !== participantId) : [...prev, participantId],
+    )
+  }
+
+  function toggleParticipantSpotlight(participantId: string) {
+    setSpotlightParticipantId((prev) => (prev === participantId ? null : participantId))
+    setLayoutMode('spotlight')
+  }
+
+  function toggleRaiseHand() {
+    const selfParticipantId = participants.find((participant) => participant.isSelf)?.id
+    if (!selfParticipantId) return
+
+    setRaisedHandParticipantIds((prev) =>
+      prev.includes(selfParticipantId) ? prev.filter((id) => id !== selfParticipantId) : [...prev, selfParticipantId],
+    )
+  }
+
+  function handleReaction() {
+    setNotification('Reactions transport is not wired yet')
+    setTimeout(() => setNotification(null), 2400)
+  }
+
+  function attachRemoteVideo(participant: MeetingParticipant, element: HTMLVideoElement | null) {
+    remoteVideoRefs.current[participant.id] = element
+    if (element && participant.stream && element.srcObject !== participant.stream) {
+      element.srcObject = participant.stream
+    }
+  }
+
   // Poll server for system and all-worker stats every 3s
   useEffect(() => {
     const statsInterval = setInterval(() => {
@@ -437,6 +516,21 @@ function App() {
     };
   }, [state]);
 
+  const layoutModel = buildMeetingLayoutModel({
+    participants,
+    layoutMode,
+    galleryPage,
+    maxVisibleTiles: MAX_MEETING_VIDEO_TILES,
+    localAudioMuted: audioMuted,
+    localVideoOff: videoOff,
+    pinnedParticipantIds,
+    spotlightParticipantId,
+    raisedHandParticipantIds,
+  })
+
+  const selfParticipant = participants.find((participant) => participant.isSelf)
+  const hasRaisedHand = !!selfParticipant && raisedHandParticipantIds.includes(selfParticipant.id)
+
   const debugInfo = {
     roomName: joinRoomId.trim(),
     localPeer: participants.find(p => p.isSelf) ? {
@@ -468,10 +562,10 @@ function App() {
   };
 
   return (
-    <div className="min-h-screen relative flex flex-col bg-neutral-50 dark:bg-[#0a0a0a] overflow-hidden text-neutral-900 dark:text-neutral-100 font-sans">
+    <div className="min-h-screen relative flex flex-col overflow-hidden bg-[#0d0f14] text-white font-sans">
       {/* Ambient background glows */}
-      <div className="absolute top-[-20%] left-[-10%] w-[50%] h-[50%] rounded-full bg-purple-500/20 blur-[120px] pointer-events-none mix-blend-screen"></div>
-      <div className="absolute bottom-[-20%] right-[-10%] w-[50%] h-[50%] rounded-full bg-indigo-500/20 blur-[120px] pointer-events-none mix-blend-screen"></div>
+      <div className="absolute top-[-20%] left-[-10%] h-[50%] w-[50%] rounded-full bg-sky-500/14 blur-[140px] pointer-events-none mix-blend-screen"></div>
+      <div className="absolute bottom-[-20%] right-[-10%] h-[50%] w-[50%] rounded-full bg-indigo-500/16 blur-[140px] pointer-events-none mix-blend-screen"></div>
 
       {notification && (
         <div className="fixed top-6 left-1/2 -translate-x-1/2 px-6 py-3 rounded-full bg-white/10 dark:bg-white/5 backdrop-blur-xl border border-neutral-200 dark:border-white/10 text-neutral-900 dark:text-white shadow-2xl z-50 animate-in slide-in-from-top-4 fade-in duration-300 font-medium tracking-wide flex items-center gap-3">
@@ -584,92 +678,34 @@ function App() {
       )}
 
       {state === 'active' && (
-        <div className="flex-1 w-full h-full p-4 md:p-8 pt-24 flex flex-col items-center justify-center relative z-10">
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 auto-rows-fr gap-4 w-full max-w-[1400px] h-full max-h-[85vh]">
-            {participants.map((p) => (
-              <div key={p.id} className="relative overflow-hidden rounded-2xl bg-neutral-900 border border-neutral-800 shadow-2xl group flex items-center justify-center h-full w-full">
-                {p.isSelf ? (
-                  <video
-                    ref={videoRef}
-                    autoPlay
-                    playsInline
-                    muted
-                    className="w-full object-cover transition-transform duration-700 group-hover:scale-105"
-                    style={{ minHeight: '100%', minWidth: '100%' }}
-                  />
-                ) : p.stream ? (
-                  <video
-                    ref={el => {
-                      remoteVideoRefs.current[p.id] = el;
-                      if (el && p.stream && el.srcObject !== p.stream) {
-                        el.srcObject = p.stream;
-                      }
-                    }}
-                    autoPlay
-                    playsInline
-                    className="w-full object-cover transition-transform duration-700 group-hover:scale-105"
-                    style={{ minHeight: '100%', minWidth: '100%' }}
-                  />
-                ) : (
-                  <div className="absolute inset-0 flex flex-col items-center justify-center bg-neutral-900 text-neutral-400 gap-3">
-                    <div className="w-16 h-16 rounded-full bg-neutral-800 flex items-center justify-center text-xl font-medium border border-neutral-700 shadow-inner">
-                      {p.id.charAt(0).toUpperCase()}
-                    </div>
-                    <span className="text-sm font-medium tracking-wide">Connecting...</span>
-                  </div>
-                )}
-                
-                {/* Peer ID & Diagnostic Topology Badge */}
-                <div className="absolute bottom-4 left-4 flex flex-col gap-2 z-20">
-                  <div className="bg-black/60 backdrop-blur-sm px-3 py-1.5 rounded-lg text-xs font-medium text-white border border-white/10 shadow-lg inline-flex w-max">
-                    {p.isSelf ? `You (${p.userName})` : `${p.userName || 'Unknown'} (${p.id.slice(-4)})`}
-                  </div>
-                  {p.routerId && (
-                    <div className="bg-indigo-600/80 backdrop-blur-md px-2 py-1 rounded-md text-[10px] uppercase tracking-wider font-semibold text-white/90 border border-indigo-400/30 shadow-lg inline-flex w-max items-center gap-1.5">
-                      <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse"></span>
-                      R:{p.routerId.split('-')[0]} • W:{p.workerPid || '?'}
-                    </div>
-                  )}
-                </div>
-
-                {/* Local Controls overlay inside the local video tile */}
-                {p.isSelf && (
-                  <div className="absolute bottom-4 right-4 flex gap-2">
-                    <Button 
-                      onClick={toggleAudio} 
-                      variant={audioMuted ? "destructive" : "secondary"} 
-                      size="icon" 
-                      className={`rounded-full h-10 w-10 shadow-lg transition-all cursor-pointer ${!audioMuted && 'bg-white/20 hover:bg-white/30 text-white backdrop-blur-md border border-white/10'}`}
-                    >
-                      {audioMuted ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
-                    </Button>
-                    <Button 
-                      onClick={toggleVideo} 
-                      variant={videoOff ? "destructive" : "secondary"} 
-                      size="icon" 
-                      className={`rounded-full h-10 w-10 shadow-lg transition-all cursor-pointer ${!videoOff && 'bg-white/20 hover:bg-white/30 text-white backdrop-blur-md border border-white/10'}`}
-                    >
-                      {videoOff ? <VideoOff className="h-4 w-4" /> : <VideoIcon className="h-4 w-4" />}
-                    </Button>
-                    <div className="w-px h-6 bg-white/20 my-auto mx-1"></div>
-                    <Button 
-                      onClick={() => {
-                        botsRef.current.forEach(b => b.disconnect());
-                        botsRef.current = [];
-                        window.location.reload();
-                      }}
-                      variant="destructive"
-                      className="rounded-full shadow-lg transition-all cursor-pointer flex items-center gap-2 px-4 shadow-red-500/20"
-                    >
-                      <PhoneOff className="h-4 w-4" />
-                      <span className="font-medium text-xs">Leave</span>
-                    </Button>
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
+        <>
+          <LargeMeetingLayout
+            model={layoutModel}
+            layoutMode={layoutMode}
+            participantPanelOpen={participantPanelOpen}
+            onCloseParticipantPanel={() => setParticipantPanelOpen(false)}
+            onTogglePin={toggleParticipantPin}
+            onToggleSpotlight={toggleParticipantSpotlight}
+            localVideoRef={videoRef}
+            onAttachRemoteVideo={attachRemoteVideo}
+            onGalleryPageChange={setGalleryPage}
+          />
+          <MeetingControlBar
+            audioMuted={audioMuted}
+            videoOff={videoOff}
+            layoutMode={layoutMode}
+            participantCount={participants.length}
+            participantPanelOpen={participantPanelOpen}
+            hasRaisedHand={hasRaisedHand}
+            onToggleAudio={toggleAudio}
+            onToggleVideo={toggleVideo}
+            onLayoutChange={setLayoutMode}
+            onToggleParticipants={() => setParticipantPanelOpen((open) => !open)}
+            onToggleRaiseHand={toggleRaiseHand}
+            onLeave={handleLeaveMeeting}
+            onReact={handleReaction}
+          />
+        </>
       )}
     </div>
   )
