@@ -122,7 +122,7 @@ function BotPanel({
   roomId: string;
   botsRef: MutableRefObject<BotHandle[]>;
   botCounterRef: MutableRefObject<number>;
-  fileInputRef: RefObject<HTMLInputElement>;
+  fileInputRef: RefObject<HTMLInputElement | null>;
   botCount: number;
   onCountChange: (n: number) => void;
 }) {
