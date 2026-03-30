@@ -521,7 +521,7 @@ function App() {
           myWorkerPid={participants.find(p => p.isSelf)?.workerPid}
           inMeeting={state === 'active'}
         />
-        {import.meta.env.DEV && state === 'active' && (
+        {state === 'active' && (
           <BotPanel
             roomId={joinRoomId.trim()}
             botsRef={botsRef}
