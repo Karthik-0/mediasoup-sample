@@ -269,6 +269,9 @@ function App() {
   const [joinRoomId, setJoinRoomId] = useState('')
   const [userNameInput, setUserNameInput] = useState('')
   const [showDiagnostics, setShowDiagnostics] = useState(false)
+  const [showTopologyDiagnosticsWindow, setShowTopologyDiagnosticsWindow] = useState(false)
+  const [showResourceMonitorWindow, setShowResourceMonitorWindow] = useState(false)
+  const [showDevBotsWindow, setShowDevBotsWindow] = useState(false)
   const [hardwareStats, setHardwareStats] = useState<any>(null)
   // Multi-participant state
   const [participants, setParticipants] = useState<MeetingParticipant[]>([])
@@ -302,7 +305,7 @@ function App() {
     if (state === 'active' && videoRef.current && meetingRef.current) {
       videoRef.current.srcObject = meetingRef.current.stream
     }
-  }, [state])
+  }, [state, layoutMode, galleryPage, participants.length])
 
   useEffect(() => {
     participantsRef.current = participants
@@ -612,11 +615,15 @@ function App() {
     } : null
   };
 
+  const showAnyDebugWindow = showTopologyDiagnosticsWindow || showResourceMonitorWindow || showDevBotsWindow
+
+  const activeRoomLabel = joinRoomId.trim() || (routerId ? `room-${routerId.slice(0, 8)}` : 'meeting-room');
+
   return (
-    <div className="min-h-screen relative flex flex-col overflow-hidden bg-[#0d0f14] text-white font-sans">
+    <div className="relative flex h-screen flex-col overflow-hidden bg-[#f4f7fb] text-slate-900 font-sans">
       {/* Ambient background glows */}
-      <div className="absolute top-[-20%] left-[-10%] h-[50%] w-[50%] rounded-full bg-sky-500/14 blur-[140px] pointer-events-none mix-blend-screen"></div>
-      <div className="absolute bottom-[-20%] right-[-10%] h-[50%] w-[50%] rounded-full bg-indigo-500/16 blur-[140px] pointer-events-none mix-blend-screen"></div>
+      <div className="absolute top-[-20%] left-[-10%] h-[50%] w-[50%] rounded-full bg-sky-300/35 blur-[140px] pointer-events-none"></div>
+      <div className="absolute bottom-[-20%] right-[-10%] h-[50%] w-[50%] rounded-full bg-indigo-300/35 blur-[140px] pointer-events-none"></div>
 
       {notification && (
         <div className="fixed top-6 left-1/2 -translate-x-1/2 px-6 py-3 rounded-full bg-white/10 dark:bg-white/5 backdrop-blur-xl border border-neutral-200 dark:border-white/10 text-neutral-900 dark:text-white shadow-2xl z-50 animate-in slide-in-from-top-4 fade-in duration-300 font-medium tracking-wide flex items-center gap-3">
@@ -625,15 +632,9 @@ function App() {
         </div>
       )}
 
-      {routerId && state === 'active' && (
-        <div className="absolute top-6 left-6 z-40 bg-white/50 dark:bg-black/40 backdrop-blur-md border border-neutral-200 dark:border-white/10 px-4 py-2 rounded-xl shadow-lg flex items-center gap-3 transition-all">
-          <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
-          <p className="text-sm font-medium text-neutral-700 dark:text-white">Room: <code className="font-mono text-xs bg-black/5 dark:bg-black/50 px-2 py-1 rounded text-indigo-600 dark:text-purple-300 ml-1">{joinRoomId.trim() || routerId?.slice(0, 8)}</code></p>
-        </div>
-      )}
-
+      {showAnyDebugWindow && (
       <div className="absolute top-6 right-6 z-50 flex flex-col gap-3 items-end">
-        {routerId && state === 'active' && (
+        {showTopologyDiagnosticsWindow && routerId && state === 'active' && (
           <div className={`bg-black/80 backdrop-blur-md border border-white/20 p-4 rounded-xl shadow-2xl text-[10px] md:text-xs font-mono text-green-400 max-h-[80vh] transition-all duration-300 ${showDiagnostics ? 'w-72 md:w-96 overflow-auto' : 'w-auto overflow-hidden'}`}>
             <div className={`flex justify-between items-center ${showDiagnostics ? 'border-b border-white/10 pb-2 mb-4' : 'gap-4'}`}>
               <span className="text-white font-bold tracking-wider whitespace-nowrap">TOPOLOGY DIAGNOSTICS</span>
@@ -661,12 +662,14 @@ function App() {
             )}
           </div>
         )}
-        <ResourceMonitorCard
-          hardwareStats={hardwareStats}
-          myWorkerPid={participants.find(p => p.isSelf)?.workerPid}
-          inMeeting={state === 'active'}
-        />
-        {state === 'active' && (
+        {showResourceMonitorWindow && (
+          <ResourceMonitorCard
+            hardwareStats={hardwareStats}
+            myWorkerPid={participants.find(p => p.isSelf)?.workerPid}
+            inMeeting={state === 'active'}
+          />
+        )}
+        {showDevBotsWindow && state === 'active' && (
           <BotPanel
             roomId={joinRoomId.trim()}
             botsRef={botsRef}
@@ -677,6 +680,7 @@ function App() {
           />
         )}
       </div>
+      )}
 
       {state !== 'active' && (
         <div className="flex flex-col items-center justify-center flex-1 w-full max-w-md mx-auto relative z-10 px-4">
@@ -733,6 +737,12 @@ function App() {
           <LargeMeetingLayout
             model={layoutModel}
             layoutMode={layoutMode}
+            meetingDetails={{
+              roomLabel: activeRoomLabel,
+              routerId: routerId ?? 'N/A',
+              workerPid: selfParticipant?.workerPid ?? null,
+              participantCount: participants.length,
+            }}
             participantPanelOpen={participantPanelOpen}
             onCloseParticipantPanel={() => setParticipantPanelOpen(false)}
             onTogglePin={toggleParticipantPin}
@@ -755,6 +765,12 @@ function App() {
             onToggleRaiseHand={toggleRaiseHand}
             onLeave={handleLeaveMeeting}
             onReact={handleReaction}
+            showTopologyDiagnostics={showTopologyDiagnosticsWindow}
+            showResourceMonitor={showResourceMonitorWindow}
+            showDevBots={showDevBotsWindow}
+            onToggleTopologyDiagnostics={() => setShowTopologyDiagnosticsWindow((v) => !v)}
+            onToggleResourceMonitor={() => setShowResourceMonitorWindow((v) => !v)}
+            onToggleDevBots={() => setShowDevBotsWindow((v) => !v)}
           />
         </>
       )}

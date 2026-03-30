@@ -4,6 +4,43 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 import { cn } from '@/lib/utils'
 import type { MeetingPresentationParticipant } from '@/lib/meeting-layout'
 
+// Stable palettes — full Tailwind class strings so they are not purged
+const ROUTER_PALETTES = [
+  { row: 'bg-sky-50 border-sky-100',      routerBadge: 'bg-sky-100 text-sky-700' },
+  { row: 'bg-violet-50 border-violet-100', routerBadge: 'bg-violet-100 text-violet-700' },
+  { row: 'bg-emerald-50 border-emerald-100', routerBadge: 'bg-emerald-100 text-emerald-700' },
+  { row: 'bg-amber-50 border-amber-100',  routerBadge: 'bg-amber-100 text-amber-700' },
+  { row: 'bg-rose-50 border-rose-100',    routerBadge: 'bg-rose-100 text-rose-700' },
+  { row: 'bg-teal-50 border-teal-100',    routerBadge: 'bg-teal-100 text-teal-700' },
+  { row: 'bg-orange-50 border-orange-100', routerBadge: 'bg-orange-100 text-orange-700' },
+  { row: 'bg-pink-50 border-pink-100',    routerBadge: 'bg-pink-100 text-pink-700' },
+]
+
+const WORKER_BADGE_COLORS = [
+  'bg-slate-200 text-slate-700',
+  'bg-indigo-100 text-indigo-700',
+  'bg-lime-100 text-lime-700',
+  'bg-cyan-100 text-cyan-700',
+  'bg-fuchsia-100 text-fuchsia-700',
+  'bg-yellow-100 text-yellow-700',
+]
+
+function simpleHash(s: string): number {
+  let h = 0
+  for (let i = 0; i < s.length; i++) h = ((h * 31) + s.charCodeAt(i)) & 0xffff
+  return h
+}
+
+function routerPalette(routerId?: string) {
+  if (!routerId) return ROUTER_PALETTES[0]
+  return ROUTER_PALETTES[simpleHash(routerId) % ROUTER_PALETTES.length]
+}
+
+function workerBadgeColor(workerPid?: number) {
+  if (workerPid == null) return WORKER_BADGE_COLORS[0]
+  return WORKER_BADGE_COLORS[workerPid % WORKER_BADGE_COLORS.length]
+}
+
 function ParticipantRow({
   participant,
   onTogglePin,
@@ -13,43 +50,67 @@ function ParticipantRow({
   onTogglePin: () => void
   onToggleSpotlight: () => void
 }) {
+  const palette = routerPalette(participant.routerId)
+  const workerColor = workerBadgeColor(participant.workerPid)
+  const routerShort = participant.routerId ? participant.routerId.slice(0, 6) : null
+
   return (
-    <div className="flex items-center justify-between gap-3 rounded-2xl border border-white/6 bg-white/[0.03] px-3 py-2.5">
-      <div className="flex min-w-0 items-center gap-3">
-        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white/8 text-sm font-semibold text-white">
-          {participant.displayName.charAt(0).toUpperCase()}
+    <div className={cn('flex items-center gap-2 rounded-xl border px-2.5 py-2', palette.row)}>
+      {/* Avatar */}
+      <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white/70 text-xs font-semibold text-slate-600 shadow-sm">
+        {participant.displayName.charAt(0).toUpperCase()}
+      </div>
+
+      {/* Name + badges */}
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-1.5">
+          <span className="truncate text-xs font-medium text-slate-800">{participant.displayName}</span>
+          {participant.hasRaisedHand && <span className="text-[10px]">✋</span>}
+          {participant.audioMuted && (
+            <span className="text-[9px] font-semibold text-rose-500">M</span>
+          )}
         </div>
-        <div className="min-w-0">
-          <div className="truncate text-sm font-medium text-white">{participant.displayName}</div>
-          <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px] uppercase tracking-[0.18em] text-white/55">
-            {participant.hasRaisedHand ? <span className="text-amber-300">Raised</span> : null}
-            {participant.isOnStage ? <span className="text-cyan-300">On Stage</span> : null}
-            {participant.audioMuted ? <span className="text-rose-300">Muted</span> : <span>Audio</span>}
-            {participant.videoOff ? <span>Audio only</span> : <span>Video</span>}
-          </div>
+        <div className="mt-0.5 flex flex-wrap items-center gap-1">
+          {routerShort && (
+            <span className={cn('rounded px-1 py-0 text-[9px] font-mono font-medium leading-4', palette.routerBadge)}>
+              R:{routerShort}
+            </span>
+          )}
+          {participant.workerPid != null && (
+            <span className={cn('rounded px-1 py-0 text-[9px] font-mono font-medium leading-4', workerColor)}>
+              W:{participant.workerPid}
+            </span>
+          )}
         </div>
       </div>
 
-      <div className="flex shrink-0 gap-2">
+      {/* Pin / Spotlight */}
+      <div className="flex shrink-0 gap-1">
         <button
           type="button"
           onClick={onTogglePin}
+          title={participant.isPinned ? 'Unpin' : 'Pin'}
           className={cn(
-            'rounded-full border px-3 py-1.5 text-[10px] font-medium uppercase tracking-[0.18em] transition',
-            participant.isPinned ? 'border-cyan-400/50 bg-cyan-500/15 text-cyan-200' : 'border-white/10 bg-white/5 text-white/75 hover:bg-white/10',
+            'rounded-full border px-2 py-0.5 text-[9px] font-medium transition',
+            participant.isPinned
+              ? 'border-cyan-400/60 bg-cyan-100 text-cyan-700'
+              : 'border-slate-300/60 bg-white/60 text-slate-500 hover:bg-white',
           )}
         >
-          {participant.isPinned ? 'Pinned' : 'Pin'}
+          {participant.isPinned ? '📌' : 'Pin'}
         </button>
         <button
           type="button"
           onClick={onToggleSpotlight}
+          title={participant.isSpotlighted ? 'Unspotlight' : 'Spotlight'}
           className={cn(
-            'rounded-full border px-3 py-1.5 text-[10px] font-medium uppercase tracking-[0.18em] transition',
-            participant.isSpotlighted ? 'border-indigo-400/50 bg-indigo-500/15 text-indigo-100' : 'border-white/10 bg-white/5 text-white/75 hover:bg-white/10',
+            'rounded-full border px-2 py-0.5 text-[9px] font-medium transition',
+            participant.isSpotlighted
+              ? 'border-indigo-400/60 bg-indigo-100 text-indigo-700'
+              : 'border-slate-300/60 bg-white/60 text-slate-500 hover:bg-white',
           )}
         >
-          {participant.isSpotlighted ? 'Live' : 'Spot'}
+          {participant.isSpotlighted ? '⭐' : 'Spot'}
         </button>
       </div>
     </div>
@@ -74,44 +135,47 @@ export function ParticipantPanel({
   const rowVirtualizer = useVirtualizer({
     count: participants.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => 76,
+    estimateSize: () => 58,
     overscan: 6,
   })
 
   return (
     <aside
       className={cn(
-        'absolute inset-y-0 right-0 z-40 w-full max-w-sm border-l border-white/10 bg-[#0c1118]/95 shadow-2xl backdrop-blur-xl transition-transform duration-300 md:max-w-md',
-        isOpen ? 'translate-x-0' : 'translate-x-full',
+        'absolute inset-y-0 left-0 z-40 flex w-64 flex-col border-r border-slate-200 bg-white/95 shadow-xl backdrop-blur-xl transition-transform duration-300',
+        isOpen ? 'translate-x-0' : '-translate-x-full',
       )}
       aria-hidden={!isOpen}
     >
-      <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
-        <div>
-          <h3 className="text-sm font-semibold tracking-[0.16em] text-white uppercase">Participants</h3>
-          <p className="mt-1 text-xs text-white/55">Virtualized roster sorted for stage management.</p>
-        </div>
+      {/* Header */}
+      <div className="flex items-center justify-between border-b border-slate-200 px-3 py-2.5">
+        <span className="text-xs font-semibold text-slate-700">
+          Participants <span className="ml-1 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500">{participants.length}</span>
+        </span>
         <button
           type="button"
           onClick={onClose}
-          className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-[10px] font-medium uppercase tracking-[0.18em] text-white/75 transition hover:bg-white/10"
+          className="rounded p-1 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
+          aria-label="Close panel"
         >
-          Close
+          ✕
         </button>
       </div>
 
-      <div ref={parentRef} className="h-[calc(100%-73px)] overflow-auto px-4 py-4">
-        <div
-          className="relative w-full"
-          style={{ height: `${rowVirtualizer.getTotalSize()}px` }}
-        >
+      {/* Legend */}
+      <div className="border-b border-slate-100 px-3 py-1.5 text-[9px] text-slate-400">
+        Color = router group &nbsp;·&nbsp; W badge = worker PID
+      </div>
+
+      {/* List */}
+      <div ref={parentRef} className="flex-1 overflow-auto px-2 py-2">
+        <div className="relative w-full" style={{ height: `${rowVirtualizer.getTotalSize()}px` }}>
           {rowVirtualizer.getVirtualItems().map((virtualRow) => {
             const participant = participants[virtualRow.index]
-
             return (
               <div
                 key={participant.id}
-                className="absolute left-0 top-0 w-full pb-3"
+                className="absolute left-0 top-0 w-full pb-1.5"
                 style={{ transform: `translateY(${virtualRow.start}px)` }}
               >
                 <ParticipantRow

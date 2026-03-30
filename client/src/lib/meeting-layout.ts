@@ -193,6 +193,19 @@ export function buildMeetingLayoutModel({
   const remainingParticipants = sorted.filter((participant) => !stageIds.has(participant.id))
   filmstripParticipants = remainingParticipants.slice(0, Math.max(0, Math.min(FILMSTRIP_SIZE, maxVisibleTiles - stageParticipants.length)))
 
+  // Keep local self visible in stage/filmstrip layouts to prevent user disorientation.
+  const selfParticipant = sorted.find((participant) => participant.isSelf)
+  if (selfParticipant && !stageIds.has(selfParticipant.id) && !filmstripParticipants.some((participant) => participant.id === selfParticipant.id)) {
+    const filmstripCapacity = Math.max(0, Math.min(FILMSTRIP_SIZE, maxVisibleTiles - stageParticipants.length))
+    if (filmstripCapacity > 0) {
+      if (filmstripParticipants.length >= filmstripCapacity) {
+        filmstripParticipants = [...filmstripParticipants.slice(0, filmstripCapacity - 1), selfParticipant]
+      } else {
+        filmstripParticipants = [...filmstripParticipants, selfParticipant]
+      }
+    }
+  }
+
   const visibleIds = new Set([...stageParticipants, ...filmstripParticipants].map((participant) => participant.id))
 
   return {
