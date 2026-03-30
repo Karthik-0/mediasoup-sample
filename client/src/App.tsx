@@ -134,16 +134,37 @@ function BotPanel({
   botCount: number;
   onCountChange: (n: number) => void;
 }) {
-  async function handleAddCanvasBot() {
-    botCounterRef.current++;
-    const botName = `Bot-${botCounterRef.current}`;
-    try {
-      const handle = await spawnBot(roomId, botName, { videoSource: 'canvas' }, botCounterRef.current);
-      botsRef.current.push(handle);
-      onCountChange(botsRef.current.length);
-    } catch (err) {
-      console.error('[BotPanel] canvas bot spawn error:', err);
+  const [canvasBotTargetCount, setCanvasBotTargetCount] = useState(1)
+  const [videoBotTargetCount, setVideoBotTargetCount] = useState(1)
+
+  function normalizeBotCount(value: number) {
+    if (!Number.isFinite(value)) return 1
+    return Math.max(1, Math.min(200, Math.floor(value)))
+  }
+
+  async function spawnMultipleBots(videoSource: 'canvas' | File, count: number) {
+    const total = normalizeBotCount(count)
+    const newHandles: BotHandle[] = []
+
+    for (let i = 0; i < total; i++) {
+      botCounterRef.current++
+      const botName = `Bot-${botCounterRef.current}`
+      try {
+        const handle = await spawnBot(roomId, botName, { videoSource }, botCounterRef.current)
+        newHandles.push(handle)
+      } catch (err) {
+        console.error(`[BotPanel] bot spawn error (${botName}):`, err)
+      }
     }
+
+    if (newHandles.length > 0) {
+      botsRef.current.push(...newHandles)
+      onCountChange(botsRef.current.length)
+    }
+  }
+
+  async function handleAddCanvasBot() {
+    await spawnMultipleBots('canvas', canvasBotTargetCount)
   }
 
   function handleAddVideoBot() {
@@ -153,16 +174,7 @@ function BotPanel({
   async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
-    botCounterRef.current++;
-    const index = botCounterRef.current;
-    const botName = `Bot-${index}`;
-    try {
-      const handle = await spawnBot(roomId, botName, { videoSource: file }, index);
-      botsRef.current.push(handle);
-      onCountChange(botsRef.current.length);
-    } catch (err) {
-      console.error('[BotPanel] video bot spawn error:', err);
-    }
+    await spawnMultipleBots(file, videoBotTargetCount)
     e.target.value = '';
   }
 
@@ -179,18 +191,38 @@ function BotPanel({
         <span className="bg-yellow-500/20 text-yellow-300 px-2 py-0.5 rounded text-[9px]">Bots: {botCount}</span>
       </div>
       <div className="px-3 py-2 flex flex-col gap-1.5">
-        <button
-          onClick={handleAddCanvasBot}
-          className="w-full bg-white/10 hover:bg-white/20 px-2 py-1.5 rounded text-white transition-colors cursor-pointer text-[10px] text-left"
-        >
-          + Add Canvas Bot
-        </button>
-        <button
-          onClick={handleAddVideoBot}
-          className="w-full bg-white/10 hover:bg-white/20 px-2 py-1.5 rounded text-white transition-colors cursor-pointer text-[10px] text-left"
-        >
-          + Add Video Bot
-        </button>
+        <div className="flex items-center gap-1.5">
+          <input
+            type="number"
+            min={1}
+            max={200}
+            value={canvasBotTargetCount}
+            onChange={(e) => setCanvasBotTargetCount(normalizeBotCount(Number(e.target.value)))}
+            className="w-14 rounded border border-white/15 bg-white/5 px-1.5 py-1 text-[10px] text-white focus:outline-none"
+          />
+          <button
+            onClick={handleAddCanvasBot}
+            className="flex-1 bg-white/10 hover:bg-white/20 px-2 py-1.5 rounded text-white transition-colors cursor-pointer text-[10px] text-left"
+          >
+            + Add Canvas Bot(s)
+          </button>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <input
+            type="number"
+            min={1}
+            max={200}
+            value={videoBotTargetCount}
+            onChange={(e) => setVideoBotTargetCount(normalizeBotCount(Number(e.target.value)))}
+            className="w-14 rounded border border-white/15 bg-white/5 px-1.5 py-1 text-[10px] text-white focus:outline-none"
+          />
+          <button
+            onClick={handleAddVideoBot}
+            className="flex-1 bg-white/10 hover:bg-white/20 px-2 py-1.5 rounded text-white transition-colors cursor-pointer text-[10px] text-left"
+          >
+            + Add Video Bot(s)
+          </button>
+        </div>
         {botCount > 0 && (
           <button
             onClick={handleRemoveAll}
